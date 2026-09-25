@@ -479,11 +479,12 @@ class RollbackFileTest {
             process.destroyForcibly();
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             try {
-                while (process.isAlive()) {
+                boolean exited = false;
+                while (!exited) {
                     long remaining = deadline - System.nanoTime();
                     assertTrue(remaining > 0, "Child did not exit: " + process.pid());
                     try {
-                        process.waitFor(remaining, TimeUnit.NANOSECONDS);
+                        exited = JdkSupport.waitForExit(process, remaining, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException exception) {
                         interrupted = true;
                     }

@@ -46,14 +46,14 @@ class EngineRecoveryTest {
         Path log = directory.resolve(point + ".log");
         Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
-            assertTrue(process.waitFor(75, TimeUnit.SECONDS), "crash child did not reach target");
+            assertTrue(JdkSupport.waitForExit(process, 75, TimeUnit.SECONDS), "crash child did not reach target");
             String output = Files.readString(log);
             System.out.println("CRASH_EVIDENCE " + point + "\n" + output);
             assertEquals(90, process.exitValue(), output);
             assertTrue(output.contains("CRASH_POINT=" + point), output);
         } finally {
             process.destroyForcibly();
-            assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+            assertTrue(JdkSupport.waitForExit(process, 5, TimeUnit.SECONDS));
         }
         if (point.equals("after-db-write")) {
             Path journal = Path.of(database + "-journal");
