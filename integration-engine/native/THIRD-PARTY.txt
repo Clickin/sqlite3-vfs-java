@@ -54,8 +54,8 @@ VFS compatibility source checks
   and file-kind flags. The C trampoline forwards them unchanged to Java and
   returns the actual host access flags. Pager path lengths are UTF-8 bytes.
   sqlite3PagerWalSupported accepts either exclusive mode or io_methods >= 2
-  with xShmMap. This bridge uses io_methods 1 and leaves WAL compiled: shared
-  WAL is unavailable; SQLite's exclusive-mode heap WAL behavior is not removed.
+  with xShmMap. The bridge selects io_methods 2 when host SHM is supported,
+  otherwise version 1. WAL remains compiled, including exclusive-mode heap WAL.
   __wasi__ in sqlite3.h already implies SQLITE_OMIT_LOAD_EXTENSION. Explicit
   unsupported dynamic-loader callbacks are also provided by java_nio_vfs.c.
 
