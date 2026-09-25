@@ -391,6 +391,10 @@ class RollbackFileTest {
             return new Child(NativeOracle.class, path.toString(), initialize ? "init" : "open");
         }
 
+        static Child nativeWalDb(Path path, boolean initialize) throws Exception {
+            return new Child(NativeOracle.class, path.toString(), initialize ? "init" : "open", "WAL");
+        }
+
         Child(Class<?> mainClass, String... arguments) throws Exception {
             String classpath = System.getProperty("surefire.test.class.path");
             if (classpath == null || classpath.isBlank()) {

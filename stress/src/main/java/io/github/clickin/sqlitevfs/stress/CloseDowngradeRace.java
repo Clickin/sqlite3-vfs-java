@@ -34,31 +34,43 @@ public class CloseDowngradeRace {
     }
 
     @Actor
-    public void closeOriginal(III_Result result) throws IOException {
-        files.handles[0].close();
-        result.r1 = files.handles[0].level() == NONE ? 1 : 0;
-    }
+        public void closeOriginal(III_Result result) {
+            try {
+                files.handles[0].close();
+                result.r1 = files.handles[0].level() == NONE ? 1 : 0;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Actor
-    public void downgrade(III_Result result) throws IOException {
-        files.handles[1].unlock(SHARED);
-        result.r2 = files.handles[1].level() == SHARED ? 1 : 0;
-    }
+        public void downgrade(III_Result result) {
+            try {
+                files.handles[1].unlock(SHARED);
+                result.r2 = files.handles[1].level() == SHARED ? 1 : 0;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Arbiter
-    public void check(III_Result result) throws IOException {
-        try (files) {
-            RollbackFile writer = files.handles[1];
-            RollbackFile arriving = files.handles[2];
-            require(writer.level() == SHARED);
-            require(!arriving.checkReservedLock());
-            require(arriving.lock(SHARED));
-            require(arriving.lock(RESERVED));
-            require(!arriving.lock(EXCLUSIVE));
-            writer.close();
-            require(arriving.lock(EXCLUSIVE));
-            files.checkReopen();
-            result.r3 = 1;
+        public void check(III_Result result) {
+            try {
+                try (files) {
+                    RollbackFile writer = files.handles[1];
+                    RollbackFile arriving = files.handles[2];
+                    require(writer.level() == SHARED);
+                    require(!arriving.checkReservedLock());
+                    require(arriving.lock(SHARED));
+                    require(arriving.lock(RESERVED));
+                    require(!arriving.lock(EXCLUSIVE));
+                    writer.close();
+                    require(arriving.lock(EXCLUSIVE));
+                    files.checkReopen();
+                    result.r3 = 1;
+                }
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
         }
-    }
 }

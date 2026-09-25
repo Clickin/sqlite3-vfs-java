@@ -34,26 +34,38 @@ public class PendingArrivalRace {
     }
 
     @Actor
-    public void departure(III_Result result) throws IOException {
-        files.handles[1].close();
-        result.r1 = files.handles[1].level() == NONE ? 1 : 0;
-    }
+        public void departure(III_Result result) {
+            try {
+                files.handles[1].close();
+                result.r1 = files.handles[1].level() == NONE ? 1 : 0;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Actor
-    public void arrival(III_Result result) throws IOException {
-        result.r2 = files.handles[2].lock(SHARED) ? 0 : 1;
-    }
+        public void arrival(III_Result result) {
+            try {
+                result.r2 = files.handles[2].lock(SHARED) ? 0 : 1;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Arbiter
-    public void check(III_Result result) throws IOException {
-        try (files) {
-            require(files.handles[0].level() == PENDING);
-            require(files.handles[0].lock(EXCLUSIVE));
-            require(!files.handles[2].lock(SHARED));
-            files.handles[0].unlock(SHARED);
-            require(files.handles[2].lock(SHARED));
-            files.checkReopen();
-            result.r3 = 1;
+        public void check(III_Result result) {
+            try {
+                try (files) {
+                    require(files.handles[0].level() == PENDING);
+                    require(files.handles[0].lock(EXCLUSIVE));
+                    require(!files.handles[2].lock(SHARED));
+                    files.handles[0].unlock(SHARED);
+                    require(files.handles[2].lock(SHARED));
+                    files.checkReopen();
+                    result.r3 = 1;
+                }
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
         }
-    }
 }

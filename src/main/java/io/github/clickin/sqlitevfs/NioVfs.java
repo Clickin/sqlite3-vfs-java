@@ -1,6 +1,7 @@
 package io.github.clickin.sqlitevfs;
 
 import java.io.IOException;
+import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.AccessDeniedException;
@@ -19,9 +20,9 @@ import java.util.random.RandomGenerator;
 import static io.github.clickin.sqlitevfs.SqliteCodes.*;
 
 /**
- * SQLite rollback-VFS semantics over the default Java filesystem provider.
- * No engine, native extension loader, WAL shared memory or mmap is provided.
- * Adapters must advertise sqlite3_io_methods version 1.
+ * SQLite VFS semantics over the default Java filesystem provider.
+ * WAL uses real shared file mappings when {@link #sharedMemorySupported()} is
+ * true; adapters with mapped guest memory may then advertise io_methods version 2.
  *
  * <p>All database opens in the JVM must use the same RollbackFile classloader.
  * Paths must remain stable while open: concurrent rename/unlink/replacement is
@@ -39,6 +40,11 @@ public final class NioVfs {
     public record IntResult(int code, int value) {}
     public record LongResult(int code, long value) {}
     public record PathResult(int code, String path) {}
+    public record ShmResult(int code, ByteBuffer region) {}
+
+    /** Requires qualified little-endian hosts and JDK-owned deterministic unmap. */
+    public static boolean sharedMemorySupported() { return SharedMemoryFile.supported(); }
+    public static String sharedMemoryDiagnostic() { return SharedMemoryFile.diagnostic(); }
 
     private static final long JULIAN_UNIX_EPOCH_MILLIS = 210_866_760_000_000L;
     private static final long MILLIS_PER_DAY = 86_400_000L;
@@ -347,6 +353,8 @@ public final class NioVfs {
         private final RollbackFile backend;
         private final Path path;
         private final boolean deleteOnClose;
+        private final boolean mainDatabase;
+        private SharedMemoryFile sharedMemory;
         private boolean directorySync;
         private boolean closed;
         private int closeCode;
@@ -355,6 +363,7 @@ public final class NioVfs {
             this.backend = backend;
             this.path = path;
             this.deleteOnClose = (flags & SQLITE_OPEN_DELETEONCLOSE) != 0;
+            this.mainDatabase = (flags & SQLITE_OPEN_MAIN_DB) != 0;
             this.directorySync = directorySync;
         }
 
@@ -484,6 +493,66 @@ public final class NioVfs {
             }
         }
 
+        /**
+         * The returned native-endian mapped view is borrowed until shmUnmap or
+         * close. Callers must detach every alias before either operation; never
+         * access a borrowed buffer afterward. Only 32768-byte WAL-index pages
+         * are supported. The main database must hold SHARED or stronger, as in
+         * SQLite's pager protocol, to exclude sidecar deletion during attachment.
+         * SQLITE_READONLY may accompany a non-null read-only view.
+         */
+        public synchronized ShmResult shmMap(int page, int pageSize, boolean extend) {
+            if (closed || !mainDatabase || page < 0 || pageSize != SharedMemoryFile.REGION_SIZE) {
+                return new ShmResult(error(SQLITE_MISUSE, "shmMap", path,
+                        "Open main database and nonnegative 32768-byte SHM page required"), null);
+            }
+            try {
+                if (backend.level() == RollbackFile.Level.NONE) {
+                    return new ShmResult(error(SQLITE_MISUSE, "shmMap", path,
+                            "Main database SHARED lock required before SHM attachment"), null);
+                }
+                if (sharedMemory == null) sharedMemory = SharedMemoryFile.open(path, channels, fs);
+                ShmResult result = sharedMemory.map(page, pageSize, extend);
+                if (result.code() != SQLITE_OK) {
+                    error(result.code(), "shmMap", path, result.code() == SQLITE_READONLY_CANTINIT
+                            ? "NIO cannot prove a live initializer for read-only SHM"
+                            : "SHM initialization or mapping was not writable/available");
+                }
+                return result;
+            } catch (SharedMemoryFile.Failure failure) {
+                return new ShmResult(error(failure.code, "shmMap", path, failure), null);
+            } catch (RuntimeException failure) {
+                return new ShmResult(error(SQLITE_IOERR_SHMOPEN, "shmMap", path, failure), null);
+            }
+        }
+
+        public synchronized int shmLock(int offset, int count, int flags) {
+            if (closed || sharedMemory == null) {
+                return error(SQLITE_IOERR_SHMLOCK, "shmLock", path, "No attached SHM connection");
+            }
+            try {
+                int code = sharedMemory.lock(offset, count, flags);
+                return code == SQLITE_OK || code == SQLITE_BUSY ? code
+                        : error(code, "shmLock", path, "Read-only SHM cannot acquire an exclusive lock");
+            } catch (SharedMemoryFile.Failure failure) {
+                return error(failure.code, "shmLock", path, failure);
+            }
+        }
+
+        public void shmBarrier() { VarHandle.fullFence(); }
+
+        /** Detach guest aliases before calling, including when cleanup is retried. */
+        public synchronized int shmUnmap(boolean delete) {
+            if (sharedMemory == null) return SQLITE_OK;
+            try {
+                sharedMemory.unmap(delete);
+                sharedMemory = null;
+                return SQLITE_OK;
+            } catch (SharedMemoryFile.Failure failure) {
+                return error(failure.code, "shmUnmap", path, failure);
+            }
+        }
+
         /** SQLite 3.53.4 os.h fallback, not a detected physical sector size. */
         public int sectorSize() { return 4096; }
         public int deviceCharacteristics() { return 0; }
@@ -491,6 +560,11 @@ public final class NioVfs {
         public synchronized int close() {
             if (closed) {
                 return closeCode;
+            }
+            int sharedCode = shmUnmap(false);
+            if (sharedCode != SQLITE_OK) {
+                return error(SQLITE_IOERR_CLOSE, "close", path,
+                        "SHM cleanup failed; file and remaining mappings retained: " + lastError());
             }
             closed = true;
             Throwable failure = null;

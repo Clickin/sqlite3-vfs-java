@@ -32,28 +32,40 @@ public class LastReaderRace {
     }
 
     @Actor
-    public void unlock(III_Result result) throws IOException {
-        files.handles[0].unlock(NONE);
-        result.r1 = files.handles[0].level() == NONE ? 1 : 0;
-    }
+        public void unlock(III_Result result) {
+            try {
+                files.handles[0].unlock(NONE);
+                result.r1 = files.handles[0].level() == NONE ? 1 : 0;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Actor
-    public void close(III_Result result) throws IOException {
-        files.handles[1].close();
-        result.r2 = files.handles[1].level() == NONE ? 1 : 0;
-    }
+        public void close(III_Result result) {
+            try {
+                files.handles[1].close();
+                result.r2 = files.handles[1].level() == NONE ? 1 : 0;
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        }
 
     @Arbiter
-    public void check(III_Result result) throws IOException {
-        try (files) {
-            require(!files.handles[2].checkReservedLock());
-            require(files.handles[2].lock(SHARED));
-            require(files.handles[2].lock(EXCLUSIVE));
-            require(!files.handles[0].lock(SHARED));
-            files.handles[2].unlock(NONE);
-            require(files.handles[0].lock(SHARED));
-            files.checkReopen();
-            result.r3 = 1;
+        public void check(III_Result result) {
+            try {
+                try (files) {
+                    require(!files.handles[2].checkReservedLock());
+                    require(files.handles[2].lock(SHARED));
+                    require(files.handles[2].lock(EXCLUSIVE));
+                    require(!files.handles[0].lock(SHARED));
+                    files.handles[2].unlock(NONE);
+                    require(files.handles[0].lock(SHARED));
+                    files.checkReopen();
+                    result.r3 = 1;
+                }
+            } catch (IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
         }
-    }
 }

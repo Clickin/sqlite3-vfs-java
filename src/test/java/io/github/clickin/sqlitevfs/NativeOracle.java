@@ -19,18 +19,22 @@ public final class NativeOracle {
     private NativeOracle() {}
 
     public static void main(String[] args) throws Exception {
+        String requestedMode = args.length > 2 ? args[2] : "DELETE";
+        if (!requestedMode.equals("DELETE") && !requestedMode.equals("WAL")) {
+            throw new IllegalArgumentException("Expected DELETE or WAL oracle mode");
+        }
         // Select the native oracle explicitly even when the pure JVM driver is also on the classpath.
         try (Connection connection = new org.sqlite.JDBC().connect("jdbc:sqlite:" + args[0], new Properties());
              Statement statement = connection.createStatement();
              BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
              PrintWriter output = new PrintWriter(System.out, true, StandardCharsets.UTF_8)) {
-            statement.execute("PRAGMA journal_mode=DELETE");
+            statement.execute("PRAGMA journal_mode=" + requestedMode);
             statement.execute("PRAGMA busy_timeout=0");
             statement.execute("PRAGMA synchronous=FULL");
             String mode = scalar(statement, "PRAGMA journal_mode");
             String busy = scalar(statement, "PRAGMA busy_timeout");
             String sync = scalar(statement, "PRAGMA synchronous");
-            if (!mode.equalsIgnoreCase("delete") || !busy.equals("0") || !sync.equals("2")) {
+            if (!mode.equalsIgnoreCase(requestedMode) || !busy.equals("0") || !sync.equals("2")) {
                 throw new IllegalStateException("Unexpected oracle pragmas: " + mode + "/" + busy + "/" + sync);
             }
             if (args[1].equals("init")) {
