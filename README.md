@@ -99,6 +99,18 @@ Directory `force(true)`는 성공/예외를 **capability 관측으로 출력**�
 
 JUnit 외부의 별도 Java 실행에서도 unlock+descriptor-close 오류를 주입했다. backend는 재개방을 거부했고, 남은 실제 OS lock 때문에 Python native SQLite의 BEGIN IMMEDIATE는 BUSY였다. **test fixture가 소유한 raw descriptor를 정리한 후** native UPDATE/COMMIT 및 `integrity_check=ok`를 확인했다. 이는 production이 실패한 descriptor를 복구할 수 있다는 주장이 아니다.
 
+### 장애/동시성 GitHub-hosted 3-OS 실행 (45개)
+
+[Actions run 36122200402](https://github.com/Clickin/sqlite3_vfs/actions/runs/36122200402), 검증 코드 commit [`fde1f77`](https://github.com/Clickin/sqlite3_vfs/commit/fde1f77fbc6ffe9089a3848523f34e09455d6cbc). 각 OS의 JUnit XML 3개와 close-failure child의 native commit/reopen 격리 증거를 확인했다.
+
+| runner | 기본 / 장애 / 동시성 | 전체 | 실패 / 오류 / skip |
+|---|---|---|---|
+| ubuntu-24.04 x64 | 12 / 25 / 8 | 45 passed | 0 / 0 / 0 |
+| macos-15 ARM64 | 12 / 25 / 8 | 45 passed | 0 / 0 / 0 |
+| windows-2025 x64 | 12 / 25 / 8 | 45 passed | 0 / 0 / 0 |
+
+세 runner 모두 Temurin 25.0.4.1과 native SQLite 3.53.4를 사용했다. descriptor close 전/후 오류 두 경우 모두 격리가 검증됐다. Windows directory open+force는 여전히 AccessDeniedException이며 내구성 제한을 완화하지 않았다.
+
 ### 초기 GitHub-hosted 3-OS 실행 (12개)
 
 [첫 실제 Actions run](https://github.com/Clickin/sqlite3_vfs/actions/runs/36120034297), backend commit [`98fed00`](https://github.com/Clickin/sqlite3_vfs/commit/98fed0001e35a4afee5cdb3d10d6f3eadddf7cf0). 각 job의 업로드된 JUnit XML과 환경 로그를 확인했다.
