@@ -73,6 +73,20 @@ Directory `force(true)`는 성공/예외를 **capability 관측으로 출력**�
 
 두 환경에서 ordinary file sync 및 directory open+force는 예외 없이 완료됐다. 전원 장애 시 내구성 증명은 아니다. Linux DB fixture는 macOS bind mount가 아니라 container 내부 temporary filesystem에 생성된다.
 
+### GitHub-hosted 3-OS 실행
+
+[첫 실제 Actions run](https://github.com/Clickin/sqlite3_vfs/actions/runs/36120034297), backend commit [`98fed00`](https://github.com/Clickin/sqlite3_vfs/commit/98fed0001e35a4afee5cdb3d10d6f3eadddf7cf0). 각 job의 업로드된 JUnit XML과 환경 로그를 확인했다.
+
+| runner | 관측한 환경 | 결과 | directory open+force |
+|---|---|---|---|
+| ubuntu-24.04 | Linux x64, ext4, Temurin 25.0.4.1 | 12 passed / 0 failed / 0 skipped | 예외 없이 완료 |
+| macos-15 | macOS 15.7.9 ARM64, APFS, Temurin 25.0.4.1 | 12 passed / 0 failed / 0 skipped | 예외 없이 완료 |
+| windows-2025 | Windows Server 2025 x64, NTFS, Temurin 25.0.4.1 | 12 passed / 0 failed / 0 skipped | **AccessDeniedException** |
+
+세 OS 모두 native ↔ Java 잠금과 4 GiB 초과 I/O를 통과했고 symlink/hardlink 테스트도 skip되지 않았다. **Windows에서는 READ로 디렉터리를 여는 단계가 거부됐다.** 따라서 이 방식의 portable directory sync gate는 통과하지 못했다. file sync/locking 성공과 별개의 결과이며 다른 Windows sync 경로의 불가능성까지 증명한 것은 아니다.
+
+첫 실행에서 action의 Node 20 및 setup-java v4 지원 종료 경고를 확인하여 workflow를 Node 24 기반 v5 commit으로 갱신했다. 최신 실행은 상단 Actions 링크에서 확인할 수 있다.
+
 추가로 실제 backend를 `--illegal-native-access=deny` JVM에서 실행하고 Python의 native SQLite 3.53.4로 접근했다. Java RESERVED 보유 중 `BEGIN IMMEDIATE`는 SQLITE_BUSY, backend close 후 UPDATE/COMMIT은 성공했고 `value=8`, `integrity_check=ok`를 확인했다. 이는 JUnit 바깥의 별도 실행이며 backend가 SQLite 엔진이라는 의미는 아니다.
 
 native reference source-id:
