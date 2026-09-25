@@ -73,13 +73,13 @@ The engine ownership regression suite was also run in an isolated source copy wi
 
 ## GitHub evidence
 
-- Initial12-test3-OS run: [36120034297](https://github.com/Clickin/sqlite3_vfs/actions/runs/36120034297), `98fed0001e35a4afee5cdb3d10d6f3eadddf7cf0`.
-- Fault/concurrency45-test3-OS run: [36122200402](https://github.com/Clickin/sqlite3_vfs/actions/runs/36122200402), `fde1f77fbc6ffe9089a3848523f34e09455d6cbc`.
-- Complete rollback VFS/adapter87-test3-OS run: [36124924664](https://github.com/Clickin/sqlite3_vfs/actions/runs/36124924664), `91e1e88595906eaec10fe233d6e96e00e9b3583b`.
+- Initial12-test3-OS run: [36120034297](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36120034297), `98fed0001e35a4afee5cdb3d10d6f3eadddf7cf0`.
+- Fault/concurrency45-test3-OS run: [36122200402](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36122200402), `fde1f77fbc6ffe9089a3848523f34e09455d6cbc`.
+- Complete rollback VFS/adapter87-test3-OS run: [36124924664](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36124924664), `91e1e88595906eaec10fe233d6e96e00e9b3583b`.
 
 ### Expanded final acceptance
 
-[Actions run 36134552143](https://github.com/Clickin/sqlite3_vfs/actions/runs/36134552143), source commit [`255124c80be957afa895a28584affaaa2428a8e9`](https://github.com/Clickin/sqlite3_vfs/commit/255124c80be957afa895a28584affaaa2428a8e9): **all seven jobs succeeded**. Downloaded artifacts were inspected, rather than relying only on the workflow badge.
+[Actions run 36134552143](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36134552143), source commit [`255124c80be957afa895a28584affaaa2428a8e9`](https://github.com/Clickin/sqlite3-vfs-java/commit/255124c80be957afa895a28584affaaa2428a8e9): **all seven jobs succeeded**. Downloaded artifacts were inspected, rather than relying only on the workflow badge.
 
 | Runner | JDK | Core | Engine | jcstress classes | JFR recorded pins |
 |---|---|---:|---:|---:|---:|
@@ -93,7 +93,7 @@ This closes the plan's implementation/investigation pass with the explicit stop 
 
 ## Windows directory-sync diagnosis and guest power cuts
 
-[Controlled Windows experiment 36137237917](https://github.com/Clickin/sqlite3_vfs/actions/runs/36137237917) compared Java and direct Win32 handles on the same directory. The runner reported Microsoft Corporation / Virtual Machine / HypervisorPresent=True, Windows Server 2025 build26100, C: and D: NTFS, Azure westcentralus, and no Windows container marker. Docker was running as a service, but the workflow executes PowerShell and Java directly, without a job container.
+[Controlled Windows experiment 36137237917](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36137237917) compared Java and direct Win32 handles on the same directory. The runner reported Microsoft Corporation / Virtual Machine / HypervisorPresent=True, Windows Server 2025 build26100, C: and D: NTFS, Azure westcentralus, and no Windows container marker. Docker was running as a service, but the workflow executes PowerShell and Java directly, without a job container.
 
 The original failing run36134552143 logs were also retrieved with authenticated `gh`: Azure westcentralus, windows-2025-vs2026 image20260907.229.1, NTFS WindowsFileSystemProvider, and the recorded directory AccessDeniedException. The controlled run used that same image revision; the original failure was on C:, while the controlled comparison used D:.
 
@@ -127,7 +127,7 @@ Limits: six deterministic cuts, no Windows guest power-cut trial, and QEMU cache
 
 ## Established-library Windows comparison
 
-[Run36139300447](https://github.com/Clickin/sqlite3_vfs/actions/runs/36139300447) executed the published Lucene10.3.1 and Kafka4.1.0 JARs on Windows Server2025/NTFS/Temurin25.0.4.1, with Maven Central SHA512 checks. The raw JDK directory open+force threw AccessDeniedException. Lucene IOUtils.fsync(directory,true), NIOFSDirectory.syncMetaData and Kafka Utils.flushDirIfExists returned normally. Ordinary-file WRITE+force also returned normally.
+[Run36139300447](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36139300447) executed the published Lucene10.3.1 and Kafka4.1.0 JARs on Windows Server2025/NTFS/Temurin25.0.4.1, with Maven Central SHA512 checks. The raw JDK directory open+force threw AccessDeniedException. Lucene IOUtils.fsync(directory,true), NIOFSDirectory.syncMetaData and Kafka Utils.flushDirIfExists returned normally. Ordinary-file WRITE+force also returned normally.
 
 The return values are **not evidence that the libraries flushed Windows directories**: [Lucene10.3.1 IOUtils](https://github.com/apache/lucene/blob/releases/lucene/10.3.1/lucene/core/src/java/org/apache/lucene/util/IOUtils.java) returns before opening an existing directory on Windows; [Kafka4.1.0 Utils](https://github.com/apache/kafka/blob/4.1.0/clients/src/main/java/org/apache/kafka/common/utils/Utils.java) skips directory flush on Windows and z/OS. [KAFKA-13391](https://issues.apache.org/jira/browse/KAFKA-13391) records the actual Kafka3.0.0 Windows AccessDeniedException regression; [PR11426](https://github.com/apache/kafka/pull/11426) added the Windows skip.
 
@@ -165,7 +165,7 @@ Upstream direction: offer sqlite4j the Java11-compatible real-file VFS, host/nat
 
 ### Final Java 11 / Java 25 hosted acceptance
 
-[Run36147046042](https://github.com/Clickin/sqlite3_vfs/actions/runs/36147046042), source commit[`f25e6508e05e35030021f67b24f28f015a1f6cec`](https://github.com/Clickin/sqlite3_vfs/commit/f25e6508e05e35030021f67b24f28f015a1f6cec): all six OS/runtime jobs plus the SQLite build-input job succeeded. Downloaded JUnit XML, jcstress HTML, JFR summaries and standalone load outputs were inspected.
+[Run36147046042](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36147046042), source commit[`f25e6508e05e35030021f67b24f28f015a1f6cec`](https://github.com/Clickin/sqlite3-vfs-java/commit/f25e6508e05e35030021f67b24f28f015a1f6cec): all six OS/runtime jobs plus the SQLite build-input job succeeded. Downloaded JUnit XML, jcstress HTML, JFR summaries and standalone load outputs were inspected.
 
 | Runner | Runtime | Core+engine passed | VT-only skipped | jcstress classes | Bounded load |
 |---|---|---:|---:|---:|---|
@@ -178,4 +178,4 @@ Upstream direction: offer sqlite4j the Java11-compatible real-file VFS, host/nat
 
 Every job completed1,000 FULL commits and216 connection churn cycles. Mapped-buffer counts remained0 across the four measured waves. Unix FD counts did not grow (Linux11:23→16, Linux25:22→22, macOS11:18→18, macOS25:24→24). Windows does not expose the Unix FD metric; its recorded count is explicitly unavailable, not a zero-leak measurement. Final file deletion and mapping cleanup still passed. Java25 JFR recorded0 pins on all three OSes; Java11 reports the VT event unavailable rather than claiming zero pins.
 
-The first matrix [36146240167](https://github.com/Clickin/sqlite3_vfs/actions/runs/36146240167) passed five combinations but exposed7 failures/3 errors around terminated children on Windows11. The test harness treated `isAlive()`/timed `waitFor()` as the teardown barrier; [JDK11 Windows ProcessImpl](https://github.com/openjdk/jdk11u/blob/master/src/java.base/windows/classes/java/lang/ProcessImpl.java) has exit-code shortcuts there, while unconditional `waitFor()` reaches the native process-handle wait. Test-only `JdkSupport.waitForExit` now performs that unconditional wait with a separately bounded caller timeout. No production lock behavior, assertions, sleeps or filesystem retry loops were weakened. The corrected Windows11 job passed core, engine, crash recovery, jcstress and load checks.
+The first matrix [36146240167](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36146240167) passed five combinations but exposed7 failures/3 errors around terminated children on Windows11. The test harness treated `isAlive()`/timed `waitFor()` as the teardown barrier; [JDK11 Windows ProcessImpl](https://github.com/openjdk/jdk11u/blob/master/src/java.base/windows/classes/java/lang/ProcessImpl.java) has exit-code shortcuts there, while unconditional `waitFor()` reaches the native process-handle wait. Test-only `JdkSupport.waitForExit` now performs that unconditional wait with a separately bounded caller timeout. No production lock behavior, assertions, sleeps or filesystem retry loops were weakened. The corrected Windows11 job passed core, engine, crash recovery, jcstress and load checks.
