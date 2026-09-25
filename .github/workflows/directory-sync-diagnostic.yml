@@ -16,3 +16,6 @@ jobs:
       - name: Compare Java and Win32 directory handles
         shell: pwsh
         run: ./diagnostics/windows-directory-sync.ps1
+      - name: Compare Lucene and Kafka directory sync
+        shell: pwsh
+        run: ./diagnostics/windows-library-sync.ps1
