@@ -1,0 +1,72 @@
+--- a/pom.xml
++++ b/pom.xml
+@@ -65,9 +65,9 @@
+ 			<version>6.1</version>
+ 		</dependency>
+ 		<dependency>
+-			<groupId>org.xerial</groupId>
+-			<artifactId>sqlite-jdbc</artifactId>
+-			<version>3.45.2.0</version>
++			<groupId>io.github.clickin</groupId>
++			<artifactId>sqlite3-vfs-jdbc-java25</artifactId>
++			<version>0.1.0-SNAPSHOT</version>
+ 		</dependency>
+ 		<dependency>
+ 			<groupId>org.xerial.thirdparty</groupId>
+--- a/src/main/java/mil/nga/geopackage/GeoPackageManager.java
++++ b/src/main/java/mil/nga/geopackage/GeoPackageManager.java
+@@ -380,7 +380,7 @@
+ 
+ 		// load the sqlite-JDBC driver using the current class loader
+ 		try {
+-			Class.forName("org.sqlite.JDBC");
++			Class.forName("io.roastedroot.sqlite4j.JDBC");
+ 		} catch (ClassNotFoundException e) {
+ 			throw new GeoPackageException(
+ 					"Failed to load the SQLite JDBC driver", e);
+@@ -399,7 +399,13 @@
+ 
+ 		ConnectionSource connectionSource;
+ 		try {
+-			connectionSource = new JdbcConnectionSource(databaseUrl);
++			connectionSource = new JdbcConnectionSource(databaseUrl,
++					new com.j256.ormlite.jdbc.db.SqliteDatabaseType() {
++						@Override
++						protected String[] getDriverClassNames() {
++							return new String[] { "io.roastedroot.sqlite4j.JDBC" };
++						}
++					});
+ 		} catch (SQLException e) {
+ 			throw new GeoPackageException(
+ 					"Failed to get connection source to the SQLite file: "
+--- a/src/main/java/mil/nga/geopackage/extension/rtree/GeometryFunction.java
++++ b/src/main/java/mil/nga/geopackage/extension/rtree/GeometryFunction.java
+@@ -2,7 +2,7 @@
+ 
+ import java.sql.SQLException;
+ 
+-import org.sqlite.Function;
++import io.roastedroot.sqlite4j.Function;
+ 
+ import mil.nga.geopackage.geom.GeoPackageGeometryData;
+ 
+@@ -53,7 +53,7 @@
+ 	 * {@inheritDoc}
+ 	 */
+ 	@Override
+-	protected void xFunc() throws SQLException {
++	public void xFunc() throws SQLException {
+ 
+ 		int argCount = args();
+ 		if (argCount != 1) {
+--- a/src/main/java/mil/nga/geopackage/extension/rtree/RTreeIndexExtension.java
++++ b/src/main/java/mil/nga/geopackage/extension/rtree/RTreeIndexExtension.java
+@@ -4,7 +4,7 @@
+ import java.util.logging.Level;
+ import java.util.logging.Logger;
+ 
+-import org.sqlite.Function;
++import io.roastedroot.sqlite4j.Function;
+ 
+ import mil.nga.geopackage.GeoPackage;
+ import mil.nga.geopackage.db.GeoPackageConnection;

@@ -1,0 +1,192 @@
+{
+  "project": "ngageoint/geopackage-java",
+  "version": "6.6.7",
+  "revision": "e1fcac451f88d828d1e46cb07d5afe7a7bf867d8",
+  "environment": {
+    "os": "macOS ARM64",
+    "jdk": "Temurin 25.0.2",
+    "headless": true
+  },
+  "scope": "Entire upstream default Maven test identity set; no assertion edits or additional skips. JVM result assembled from completed full-run reports and all remaining classes in three disjoint batches.",
+  "upstream_test_and_resource_files": 175,
+  "test_manifest_sha256": "b2dd6781c38d23fc734c5c16e2e0abe7697a296c0c34581fc8e460e58af305dc",
+  "test_identity_sha256": "cb8d2a73f5ba86c1b51081fd6d09e6fe5de44653d88872055775f893774f338e",
+  "original_xerial": "3.45.2.0",
+  "matched_xerial": "3.53.4.0",
+  "candidate": "io.github.clickin:sqlite3-vfs-jdbc-java25:0.1.0-SNAPSHOT",
+  "driver_source_revision": "f25e6508e05e35030021f67b24f28f015a1f6cec",
+  "candidate_jdbc_sha256": "68e747442141c5700b1c2a387019ea1f89f8fac123a12079b6b073cd147f0a52",
+  "candidate_vfs_sha256": "d163a96cb500d5a691431c7a8b7e29e014d1177df0e0476d1f3e6ac0c670eb00",
+  "original_native": {
+    "tests": 367,
+    "failures": 4,
+    "errors": 0,
+    "skipped": 1
+  },
+  "matched_native": {
+    "tests": 367,
+    "failures": 4,
+    "errors": 0,
+    "skipped": 1
+  },
+  "candidate_total": {
+    "tests": 367,
+    "failures": 4,
+    "errors": 0,
+    "skipped": 1
+  },
+  "comparison": {
+    "baseline": {
+      "passed": 362,
+      "skipped": 1,
+      "failure": 4
+    },
+    "candidate": {
+      "passed": 362,
+      "skipped": 1,
+      "failure": 4
+    },
+    "same_outcomes": true,
+    "all_tests_passed": false,
+    "differences": [],
+    "baseline_nonpassing": {
+      "mil.nga.geopackage.features.OAPIFeatureGeneratorTest#": "skipped",
+      "mil.nga.geopackage.tiles.UrlTileGeneratorCreateTest#testGenerateTilesCompress": "failure",
+      "mil.nga.geopackage.tiles.UrlTileGeneratorCreateTest#testGenerateTilesCompressQuality": "failure",
+      "mil.nga.geopackage.tiles.UrlTileGeneratorImportTest#testGenerateTilesCompress": "failure",
+      "mil.nga.geopackage.tiles.UrlTileGeneratorImportTest#testGenerateTilesCompressQuality": "failure"
+    }
+  },
+  "same_failure_details": true,
+  "original_native_elapsed_seconds_approx": 469,
+  "matched_native_elapsed_seconds_approx": 564,
+  "candidate_initial_attempt": {
+    "timeout_seconds": 3600,
+    "completed": {
+      "tests": 268,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    }
+  },
+  "candidate_remaining_batches": [
+    {
+      "classes": [
+        "mil.nga.geopackage.tiles.UrlTileGeneratorCreateTest",
+        "mil.nga.geopackage.tiles.matrixset.TileMatrixSetCreateTest",
+        "mil.nga.geopackage.geom.GeoPackageGeometryDataCreateTest",
+        "mil.nga.geopackage.db.TransactionTest",
+        "mil.nga.geopackage.tiles.matrix.TileMatrixImportTest"
+      ],
+      "result": {
+        "tests": 25,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "wall_seconds": 169.49
+    },
+    {
+      "classes": [
+        "mil.nga.geopackage.tiles.UrlTileGeneratorImportTest",
+        "mil.nga.geopackage.db.AlterTableImportTest",
+        "mil.nga.geopackage.attributes.AttributesImportTest",
+        "mil.nga.geopackage.tiles.matrix.TileMatrixCreateTest",
+        "mil.nga.geopackage.tiles.TileCreatorGetTileTest"
+      ],
+      "result": {
+        "tests": 24,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "wall_seconds": 163.88
+    },
+    {
+      "classes": [
+        "mil.nga.geopackage.tiles.user.TileImportTest",
+        "mil.nga.geopackage.db.AlterTableCreateTest",
+        "mil.nga.geopackage.manager.GeoPackageManagerTest",
+        "mil.nga.geopackage.ReadmeTest",
+        "mil.nga.geopackage.GeoPackageImportTest",
+        "mil.nga.geopackage.attributes.AttributesCreateTest",
+        "mil.nga.geopackage.geom.GeoPackageGeometryDataImportTest",
+        "mil.nga.geopackage.tiles.matrixset.TileMatrixSetImportTest"
+      ],
+      "result": {
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "wall_seconds": 830.39
+    }
+  ],
+  "consumer_adaptations": [
+    "Replace xerial dependency with the Java25 JDBC artifact.",
+    "Change the explicitly loaded driver class and ORMLite getDriverClassNames selection.",
+    "Change two Function imports to the sqlite4j namespace.",
+    "Widen GeometryFunction.xFunc from protected to public to match sqlite4j; callback logic unchanged."
+  ],
+  "smoke": "GeoPackage public create/open returned io.roastedroot.sqlite4j.jdbc4.JDBC4Connection, SQLite3.53.4. Independent native SQLite read the persisted n=73 row and integrity_check=ok.",
+  "profile": {
+    "seconds": 30,
+    "execution_samples": 2392,
+    "sample_groups": {
+      "generated_sqlite_on_stack": 2292,
+      "vfs_on_stack": 215
+    },
+    "top_methods": [
+      [
+        "io/roastedroot/sqlite4j/SQLiteModuleMachineFuncGroup_0.func_140",
+        1467
+      ],
+      [
+        "io/roastedroot/sqlite4j/SQLiteModuleMachineFuncGroup_0.func_465",
+        100
+      ],
+      [
+        "io/roastedroot/sqlite4j/SQLiteModuleMachineFuncGroup_0.func_1256",
+        93
+      ],
+      [
+        "run/endive/runtime/ByteArrayMemory.readInt",
+        86
+      ],
+      [
+        "io/roastedroot/sqlite4j/SQLiteModuleMachineFuncGroup_0.func_1440",
+        52
+      ],
+      [
+        "io/roastedroot/sqlite4j/SQLiteModuleMachineFuncGroup_0.func_1101",
+        46
+      ],
+      [
+        "run/endive/runtime/ByteArrayMemory.writeI32",
+        32
+      ],
+      [
+        "run/endive/runtime/ByteArrayMemory.readShort",
+        26
+      ]
+    ],
+    "monitor_events": [
+      [
+        "io/roastedroot/sqlite4j/jdbc4/JDBC4DatabaseMetaData",
+        11207
+      ],
+      [
+        "io/roastedroot/sqlite4j/core/WasmDB",
+        151
+      ]
+    ],
+    "qualification": "Single threaded-DAO workload sample; not a full-suite profile or controlled VFS-vs-engine benchmark."
+  },
+  "limitations": [
+    "Not an all-green upstream build: same four JPEG/image failures and one existing ignored class on every driver.",
+    "Candidate did not finish the single full-suite invocation within3600seconds; all missing99 cases were completed in disjoint batches.",
+    "Consumer comparison covers Java25 on macOS only.",
+    "Upstream randomized fixtures and live network tile source mean durations are not a controlled performance benchmark.",
+    "No driver production code was changed to obtain these results."
+  ]
+}

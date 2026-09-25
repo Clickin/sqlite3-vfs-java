@@ -179,3 +179,49 @@ Upstream direction: offer sqlite4j the Java11-compatible real-file VFS, host/nat
 Every job completed1,000 FULL commits and216 connection churn cycles. Mapped-buffer counts remained0 across the four measured waves. Unix FD counts did not grow (Linux11:23→16, Linux25:22→22, macOS11:18→18, macOS25:24→24). Windows does not expose the Unix FD metric; its recorded count is explicitly unavailable, not a zero-leak measurement. Final file deletion and mapping cleanup still passed. Java25 JFR recorded0 pins on all three OSes; Java11 reports the VT event unavailable rather than claiming zero pins.
 
 The first matrix [36146240167](https://github.com/Clickin/sqlite3-vfs-java/actions/runs/36146240167) passed five combinations but exposed7 failures/3 errors around terminated children on Windows11. The test harness treated `isAlive()`/timed `waitFor()` as the teardown barrier; [JDK11 Windows ProcessImpl](https://github.com/openjdk/jdk11u/blob/master/src/java.base/windows/classes/java/lang/ProcessImpl.java) has exit-code shortcuts there, while unconditional `waitFor()` reaches the native process-handle wait. Test-only `JdkSupport.waitForExit` now performs that unconditional wait with a separately bounded caller timeout. No production lock behavior, assertions, sleeps or filesystem retry loops were weakened. The corrected Windows11 job passed core, engine, crash recovery, jcstress and load checks.
+
+## External application: GeoPackage Java
+
+The complete default test suite of [NGA GeoPackage Java 6.6.7](https://github.com/ngageoint/geopackage-java/tree/e1fcac451f88d828d1e46cb07d5afe7a7bf867d8) was compared across three drivers on macOS ARM64 / Temurin 25.0.2. It exercises real SQLite files through JDBC and ORMLite, including schema changes, transactions, geometry/BLOB data, R-tree callbacks, metadata, imported databases and threaded DAO access. Its 87 reported test classes provide broader file-backed coverage than ORMLite's SQLite dialect tests, which use H2 for their database fixture, or Jdbi's smaller SQLite-specific suite.
+
+| Driver | Reported cases | Passed | Failures | Errors | Existing skips |
+|---|---:|---:|---:|---:|---:|
+| Upstream xerial 3.45.2.0 | 367 | 362 | 4 | 0 | 1 |
+| Version-matched xerial 3.53.4.0 | 367 | 362 | 4 | 0 | 1 |
+| Java VFS JDBC / SQLite 3.53.4 | 367 | 362 | 4 | 0 | 1 |
+
+**Every test identity, status and failure message matched both native baselines.** This is not an all-green build. The four existing failures are `testGenerateTilesCompress` and `testGenerateTilesCompressQuality` in both `UrlTileGeneratorCreateTest` and `UrlTileGeneratorImportTest`. They fail at image decoding or JPEG generation (`Bogus input colorspace`, expected 5 tiles but generated 0). `OAPIFeatureGeneratorTest` is ignored by upstream. None of these cases was removed or reclassified.
+
+All 175 upstream test-source/resource files remained byte-identical. The [consumer adaptation patch](diagnostics/geopackage-java-vfs.patch) changes the Maven dependency, the explicit driver name, ORMLite's driver-class selection, two `Function` imports, and the visibility of `GeometryFunction.xFunc` from protected to public. That last change is necessary because sqlite4j exposes the callback as public. The callback body, SQL and assertions are unchanged; this is a source-level integration, not an unmodified xerial binary drop-in. No production code in this driver was changed for the comparison.
+
+The candidate runtime dependency tree contains our JDBC/VFS artifacts and no xerial SQLite JDBC artifact. Its tests ran with `--illegal-native-access=deny`. A separate GeoPackage public-interface smoke run reported `io.roastedroot.sqlite4j.jdbc4.JDBC4Connection` and SQLite 3.53.4; native Python SQLite subsequently read the persisted row and returned `integrity_check=ok`.
+
+### Runtime limitation found
+
+The native full runs finished in approximately 7m49s and 9m23s. The Java full invocation reached an external 3,600-second deadline after reporting 268 completed cases. Every remaining class was then executed in three isolated batches, adding the missing 99 cases. The union was checked for missing, extra and duplicate identities against the native suite; none remained. The [machine-readable results](diagnostics/geopackage-results.json) record those batches, artifact hashes and the timeout rather than presenting a successful single-run build.
+
+The slower execution is a real integration concern, although randomized fixtures, live tile downloads and concurrent runs make these durations unsuitable as a controlled throughput benchmark. During the threaded DAO workload, a thread dump showed metadata-monitor waiters and a worker executing generated SQLite code. A 30-second JFR sample recorded 11,207 metadata-monitor contention events and 151 WasmDB-monitor events; 1,467 of 2,392 execution samples had a generated SQLite function at the top of the stack. This does not isolate a VFS bottleneck or establish a native-lock contention improvement. Functional outcome compatibility is supported here; native-equivalent performance is not.
+
+### Reproduction
+
+Build/install the Java 25 VFS and JDBC artifacts using the README instructions. Check out the pinned GeoPackage revision in separate directories for each driver:
+
+```sh
+git clone https://github.com/ngageoint/geopackage-java.git geopackage
+git -C geopackage checkout e1fcac451f88d828d1e46cb07d5afe7a7bf867d8
+```
+
+Run the upstream baseline without test filters:
+
+```sh
+mvn -B --no-transfer-progress -Djava.awt.headless=true test
+```
+
+For the version-matched baseline, change only the xerial dependency from 3.45.2.0 to 3.53.4.0. For the candidate, apply `diagnostics/geopackage-java-vfs.patch` to a fresh checkout and run:
+
+```sh
+mvn -B --no-transfer-progress -Djava.awt.headless=true \
+  -DargLine=--illegal-native-access=deny test
+```
+
+`diagnostics/compare-junit.py BASELINE_REPORT_DIR CANDIDATE_REPORT_DIR [...]` compares complete Surefire report sets and supports disjoint batches. It rejects missing/extra/duplicate cases and reports baseline failures explicitly; a matching comparison does not turn Maven's failed build into a passing one. The actual remaining batch selections are preserved in `diagnostics/geopackage-results.json`. This consumer comparison covers Java 25 on macOS, not the Java 11 variant or the other OSes.
