@@ -162,3 +162,20 @@ The bounded load probe runs one persistent writer and three persistent readers t
 The first local Java11 jcstress invocation found stale Java25 generated classes from an older build and skipped its configurations. A clean stress build corrected that harness issue; the reported112 configurations actually ran afterward. CI now additionally requires a positive all-passed HTML result, because jcstress can exit normally with skipped configurations.
 
 Upstream direction: offer sqlite4j the Java11-compatible real-file VFS, host/native interoperability results and optional Java25 Arena implementation. This is an alternative filesystem integration, not a promise of a binary-compatible ZeroFS swap. For xerial, a C/JNI VFS adapter is technically possible but has not been implemented here; native lock-contention reduction is unproven and must not be claimed. No maintainer was contacted and no external PR was filed.
+
+### Final Java 11 / Java 25 hosted acceptance
+
+[Run36147046042](https://github.com/Clickin/sqlite3_vfs/actions/runs/36147046042), source commit[`f25e6508e05e35030021f67b24f28f015a1f6cec`](https://github.com/Clickin/sqlite3_vfs/commit/f25e6508e05e35030021f67b24f28f015a1f6cec): all six OS/runtime jobs plus the SQLite build-input job succeeded. Downloaded JUnit XML, jcstress HTML, JFR summaries and standalone load outputs were inspected.
+
+| Runner | Runtime | Core+engine passed | VT-only skipped | jcstress classes | Bounded load |
+|---|---|---:|---:|---:|---|
+| ubuntu-24.04 x64 | Temurin11.0.32.1 | 142 | 8 | 4/4 | pass |
+| macos-15 ARM64 | Temurin11.0.32.1 | 142 | 8 | 4/4 | pass |
+| windows-2025 x64 | Temurin11.0.32.1 | 142 | 8 | 4/4 | pass |
+| ubuntu-24.04 x64 | Temurin25.0.4.1 | 151 | 0 | 4/4 | pass |
+| macos-15 ARM64 | Temurin25.0.4.1 | 151 | 0 | 4/4 | pass |
+| windows-2025 x64 | Temurin25.0.4.1 | 151 | 0 | 4/4 | pass |
+
+Every job completed1,000 FULL commits and216 connection churn cycles. Mapped-buffer counts remained0 across the four measured waves. Unix FD counts did not grow (Linux11:23→16, Linux25:22→22, macOS11:18→18, macOS25:24→24). Windows does not expose the Unix FD metric; its recorded count is explicitly unavailable, not a zero-leak measurement. Final file deletion and mapping cleanup still passed. Java25 JFR recorded0 pins on all three OSes; Java11 reports the VT event unavailable rather than claiming zero pins.
+
+The first matrix [36146240167](https://github.com/Clickin/sqlite3_vfs/actions/runs/36146240167) passed five combinations but exposed7 failures/3 errors around terminated children on Windows11. The test harness treated `isAlive()`/timed `waitFor()` as the teardown barrier; [JDK11 Windows ProcessImpl](https://github.com/openjdk/jdk11u/blob/master/src/java.base/windows/classes/java/lang/ProcessImpl.java) has exit-code shortcuts there, while unconditional `waitFor()` reaches the native process-handle wait. Test-only `JdkSupport.waitForExit` now performs that unconditional wait with a separately bounded caller timeout. No production lock behavior, assertions, sleeps or filesystem retry loops were weakened. The corrected Windows11 job passed core, engine, crash recovery, jcstress and load checks.

@@ -62,6 +62,8 @@ Artifact group은 `io.github.clickin`, version은 `0.1.0-SNAPSHOT`이다. 현재
 
 `diagnostics/SqliteLoad.java`는 시간만 보내는 soak 대신 **1,000 FULL commits, 동시 reader 3개, 216회 connection reopen/close, checkpoint·reopen·integrity**를 검사한다. 로컬 두 변형 모두 통과했고 Unix FD 수는 16→16 / 22→22, mapped-buffer 수는 0→0이었다. 시간 의존적인 증상이 없는 한 임의의 장시간 대기는 필수 gate로 두지 않는다. 부하 검증이 전원 차단 복구를 대체하지는 않는다.
 
+[최종 두 변형 CI](https://github.com/Clickin/sqlite3_vfs/actions/runs/36147046042)에서도 **Linux/macOS/Windows × Java 11/25의 6개 조합이 모두 통과**했다. 각 OS에서 Java 11은 core+engine 142 passed / VT-only 8 skipped, Java 25는 151 passed / 0 skipped. jcstress 4/4 및 위 부하 검증도 모든 조합에서 통과했다. Windows FD 개수는 측정 API가 없어 미측정으로 표시했고, mapping 정리와 파일 삭제는 실제 검증했다.
+
 ### 이전 단일 Java 25 backend 기준
 
 2026-09-25 로컬 macOS ARM64/Temurin 25.0.2/APFS 및 Docker Linux ARM64/Temurin 25.0.4/overlay에서 각각:
