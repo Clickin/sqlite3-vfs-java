@@ -1,0 +1,100 @@
+{
+  "environment": {
+    "hypervisor": "QEMU 11.1.1, macOS ARM64 HVF",
+    "guest": "Ubuntu 24.04.4 LTS ARM64, kernel6.8.0-139-generic",
+    "jdk": "Temurin25.0.4+7",
+    "jvm_sqlite": "3.53.4",
+    "native_sqlite": "Python sqlite3 3.45.1",
+    "data_disk": "dedicated256MiB raw virtio disk, ext4 rw,relatime",
+    "disk_cache": "QEMU cache=writeback; host survives",
+    "ubuntu_image_sha256": "8b6e0e145ae2ce681d959b2b3aabcf724b027cbffff9ec8ba4d7dc789a3e6a98"
+  },
+  "method": "Host receives ACK, fsyncs external ledger, receives HOLD at actual VFS/transaction point, SIGKILLs entire QEMU process, reboots same disk and checks both engines. DELETE synchronous=EXTRA; WAL synchronous=FULL.",
+  "limitations": [
+    "Guest-power-loss only: host OS and storage caches remain alive.",
+    "Six deterministic cuts, not randomized power-loss certification.",
+    "Windows guest power-cut behavior not exercised."
+  ],
+  "results": [
+    {
+      "mode": "DELETE",
+      "point": "before-journal-sync",
+      "acknowledged": [
+        1
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "VERIFIED committed=false integrity=ok",
+        "NATIVE VERIFIED (64, 64, 1048576, 64) integrity=ok"
+      ],
+      "recovery_order": "jvm-first"
+    },
+    {
+      "mode": "DELETE",
+      "point": "after-journal-sync",
+      "acknowledged": [
+        1
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "NATIVE VERIFIED (64, 64, 1048576, 64) integrity=ok",
+        "VERIFIED committed=false integrity=ok"
+      ],
+      "recovery_order": "native-first"
+    },
+    {
+      "mode": "DELETE",
+      "point": "after-db-write",
+      "acknowledged": [
+        1
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "VERIFIED committed=false integrity=ok",
+        "NATIVE VERIFIED (64, 64, 1048576, 64) integrity=ok"
+      ],
+      "recovery_order": "jvm-first"
+    },
+    {
+      "mode": "DELETE",
+      "point": "after-commit",
+      "acknowledged": [
+        1,
+        2
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "NATIVE VERIFIED (128, 192, 2097152, 128) integrity=ok",
+        "VERIFIED committed=true integrity=ok"
+      ],
+      "recovery_order": "native-first"
+    },
+    {
+      "mode": "WAL",
+      "point": "before-commit",
+      "acknowledged": [
+        1
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "VERIFIED committed=false integrity=ok",
+        "NATIVE VERIFIED (64, 64, 1048576, 64) integrity=ok"
+      ],
+      "recovery_order": "jvm-first"
+    },
+    {
+      "mode": "WAL",
+      "point": "after-commit",
+      "acknowledged": [
+        1,
+        2
+      ],
+      "qemu_exit": -9,
+      "verification": [
+        "NATIVE VERIFIED (128, 192, 2097152, 128) integrity=ok",
+        "VERIFIED committed=true integrity=ok"
+      ],
+      "recovery_order": "native-first"
+    }
+  ]
+}

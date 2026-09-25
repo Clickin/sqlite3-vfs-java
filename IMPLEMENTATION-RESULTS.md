@@ -40,7 +40,7 @@ NIO cannot distinguish Unix `F_GETLK`'s live shared DMS owner from an exclusive 
 
 The implementation uses SQLite-visible locks, not a private protocol: on ambiguous first attachment, obtain all eight WAL lock bytes exclusively, invalidate the second and first index headers positionally before publishing shared DMS ownership, then map/release the guard locks. Native SQLite rebuilds the invalid index from the WAL. Native transaction activity can prevent this initial guard acquisition, returning `SQLITE_BUSY_RECOVERY`. After that activity ends, retry succeeds. Plain BUSY would be interpreted by SQLite as transient DMS initialization and eventually SQLITE_PROTOCOL, so the C adapter returns the recovery-specific extended code.
 
-This is a documented availability difference from native Unix F_GETLK, not a silent claim of identical behavior. Existing attached native/JVM readers and writers use the ordinary WAL protocol. Main-file SHARED ownership and stable paths remain preconditions. Deterministic unmap requires deprecated `sun.misc.Unsafe.invokeCleaner`; unsupported runtime must not silently rely on GC cleanup. Writable SHM is required for bootstrap even when the main DB is read-only.
+This is a documented availability difference from native Unix F_GETLK, not a silent claim of identical behavior. Existing attached native/JVM readers and writers use the ordinary WAL protocol. Main-file SHARED ownership and stable paths remain preconditions. The current implementation uses deprecated `sun.misc.Unsafe.invokeCleaner`; unsupported runtime must not silently rely on GC cleanup. This is not an absence of a standard alternative: Java 22+ `FileChannel.map(..., Arena)` provides deterministic unmap on arena close, but is not implemented here and conflicts with the PLAN's blanket exclusion of FFM APIs, despite not requiring native downcalls. Writable SHM is required for bootstrap even when the main DB is read-only.
 
 ## Gate failures kept explicit
 
@@ -49,7 +49,7 @@ This is a documented availability difference from native Unix F_GETLK, not a sil
 | Windows directory open + `force(true)`; `NioVfs.delete(path,true)` | directory durability requested | AccessDeniedException / IOERR_DIR_FSYNC | no successful no-op; portable directory durability not claimed |
 | fault decorator: actual descriptor close throws before releasing OS resource | no lock/resource leak | Java channel may report closed while OS lock remains | quarantine identity until JVM restart; no leak-free guarantee |
 | failed exclusive DMS probe followed by shared probe | distinguish live attachment from dead initializer | identical observations in both cases | all-WAL-byte guard + invalidation; BUSY_RECOVERY while transactions active |
-| runtime without supported deterministic mapping cleaner | timely SHM unmap/delete | no Java SE-only guaranteed primitive | WAL capability unavailable; no GC-based fallback |
+| runtime without supported deterministic mapping cleaner | timely SHM unmap/delete | current MappedByteBuffer implementation lacks an explicit standard close | current WAL capability unavailable; standard Arena mapping is an unimplemented alternative |
 | inspect engine JAR `SQLiteModule.meta` | no Wasm metadata/runtime | Wasm magic, Endive dependencies | no instruction interpreter requirement, but strict no-Wasm gates not met |
 
 ## Executed local verification
@@ -90,3 +90,37 @@ The engine ownership regression suite was also run in an isolated source copy wi
 All six JUnit artifact groups report **0 failures, 0 errors, 0 skips**. All three diagnostic summaries report successful workload behavior checks. JFR file-read/write event counts were Linux3,785/282, macOS6,164/333, Windows6,458/385. Artifacts include JUnit/native subprocess output, JFR recordings, primitive baseline summaries, jcstress reports and the actual engine JAR.
 
 This closes the plan's implementation/investigation pass with the explicit stop conditions above. It is not a claim that the unresolved portability/durability/no-Wasm constraints disappeared.
+
+## Windows directory-sync diagnosis and guest power cuts
+
+[Controlled Windows experiment 36137237917](https://github.com/Clickin/sqlite3_vfs/actions/runs/36137237917) compared Java and direct Win32 handles on the same directory. The runner reported Microsoft Corporation / Virtual Machine / HypervisorPresent=True, Windows Server 2025 build26100, C: and D: NTFS, Azure westcentralus, and no Windows container marker. Docker was running as a service, but the workflow executes PowerShell and Java directly, without a job container.
+
+The original failing run36134552143 logs were also retrieved with authenticated `gh`: Azure westcentralus, windows-2025-vs2026 image20260907.229.1, NTFS WindowsFileSystemProvider, and the recorded directory AccessDeniedException. The controlled run used that same image revision; the original failure was on C:, while the controlled comparison used D:.
+
+| Directory operation | Observed result |
+|---|---|
+| Java FileChannel.open, READ or WRITE | AccessDeniedException before force |
+| Win32 CreateFile, no BACKUP_SEMANTICS | error5 for all tested access modes |
+| BACKUP_SEMANTICS + GENERIC_READ | open succeeds; FlushFileBuffers fails with error5 |
+| BACKUP_SEMANTICS + GENERIC_WRITE or READ/WRITE | open succeeds; FlushFileBuffers succeeds |
+
+The source trace was inspected at **OpenJDK jdk-25-ga and jdk-25.0.4-ga**; this is upstream source, not a byte-for-byte verification of the exact Temurin25.0.4.1 binary. [WindowsChannelFactory](https://github.com/openjdk/jdk25u/blob/jdk-25.0.4-ga/src/java.base/windows/classes/sun/nio/fs/WindowsChannelFactory.java) maps READ to GENERIC_READ but does not set FILE_FLAG_BACKUP_SEMANTICS. [Microsoft's directory-handle contract](https://learn.microsoft.com/en-us/windows/win32/fileio/obtaining-a-handle-to-a-directory) requires that flag. [WindowsException](https://github.com/openjdk/jdk25u/blob/jdk-25.0.4-ga/src/java.base/windows/classes/sun/nio/fs/WindowsException.java) maps native error5 to AccessDeniedException. Thus the observed failure is the Java/provider directory-open path, not a Docker/Kubernetes storage restriction. Native successful flush on this runner is not proof of portable directory power-loss semantics.
+
+An additional trap: [JDK Windows force0](https://github.com/openjdk/jdk25u/blob/jdk-25.0.4-ga/src/java.base/windows/native/libnio/ch/FileDispatcherImpl.c) ignores ERROR_ACCESS_DENIED from FlushFileBuffers. The experiment observed Java READ-only ordinary-file force returning normally while a direct native READ-only flush failed with error5. A normal return on a READ-only handle is therefore not sufficient evidence that a Windows flush occurred.
+
+Then an isolated QEMU11.1.1/HVF Ubuntu24.04.4 ARM64 VM was power-cut with **SIGKILL to the entire QEMU process**, not merely the Java process. A dedicated raw virtio disk contained ext4; the DB was not on a host shared folder. The guest ran Temurin25.0.4, the actual JVM SQLite3.53.4 VFS engine, and independent Python native SQLite3.45.1.
+
+The host fsynced received commit acknowledgements to a separate ledger, waited for the specified VFS/transaction event, killed QEMU, rebooted the same disks and alternated JVM-first/native-first recovery. All six scenarios passed:
+
+| Mode | Cut point | Outcome |
+|---|---|---|
+| DELETE / synchronous=EXTRA | before journal sync | baseline transaction retained; interrupted transaction absent |
+| DELETE / synchronous=EXTRA | after journal sync | baseline retained; interrupted transaction absent |
+| DELETE / synchronous=EXTRA | after DB write | baseline retained; interrupted transaction absent |
+| DELETE / synchronous=EXTRA | after commit acknowledgement | both acknowledged transactions retained |
+| WAL / synchronous=FULL | before commit | baseline retained; interrupted transaction absent |
+| WAL / synchronous=FULL | after commit acknowledgement | both acknowledged transactions retained |
+
+Both engines verified row counts, value sums, payload lengths, existing-row updates and integrity_check=ok. Results and the exercised peer/controller are under `diagnostics/`. The controller takes a prepared-VM JSON object with `root` (evidence directory), `qemu` (argument array), and `ssh` (argument array); it assumes the dedicated guest `/dev/vdb` ext4 disk and compiled peer/JDK/runtime JARs have already been prepared. It must only be used with a disposable VM, as every cut kills the entire emulator.
+
+Limits: six deterministic cuts, no Windows guest power-cut trial, and QEMU cache=writeback leaves the host OS/storage caches alive. These are **guest-power-loss recovery results**, not physical power-loss certification or proof that directory sync is unnecessary. The first controller attempt had a three-field expected tuple for a four-field native query; that harness error was corrected before the six reported trials, without changing production code.
