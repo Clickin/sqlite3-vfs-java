@@ -51,7 +51,7 @@ JDBC artifact `io.github.clickin:sqlite3-vfs-jdbc:0.1.0-SNAPSHOT`은 현재 로�
 
 검증에는 양방향 writer 충돌, reader snapshot, PENDING 신규 reader 차단, process-kill rollback 복구, 5,001행/20,484,096 byte WAL payload와 두 번째 SHM region, checkpoint, readonly main DB, stale SHM header 복구, close 순서, alias 해제가 포함된다. 별도 packaged-driver 실행에서도 WAL commit/rollback 후 native Python SQLite가 같은 DB를 갱신하고 `integrity_check=ok`를 반환했다.
 
-GitHub 3-OS의 최신 실행과 상세 gate 판정은 [구현 결과](IMPLEMENTATION-RESULTS.md)에 기록한다. Actions는 VFS/jcstress/JFR와 엔진 acceptance를 분리하고 JUnit XML·JFR·baseline·엔진 JAR를 artifact로 보존한다.
+[최종 GitHub 3-OS 실행](https://github.com/Clickin/sqlite3_vfs/actions/runs/36134552143)에서도 Linux/macOS/Windows 각각 **VFS 108 + engine 39 passed, 실패·오류·skip 0**, jcstress 4/4 passed, JFR recorded pins 0을 확인했다. 상세 gate 판정은 [구현 결과](IMPLEMENTATION-RESULTS.md)에 기록했다. Actions artifact의 JUnit XML·JFR summary·stress report를 직접 확인했으며, pin 0은 nonblocking I/O의 증명이 아니다.
 
 ## 호출 및 지원 계약
 

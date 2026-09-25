@@ -67,10 +67,26 @@ JAR audit found no `.dll`, `.so`, `.dylib`, `.jnilib` in the engine/VFS/runtime 
 
 Linux JFR: 0 recorded pins, 4,729 file-read events, 260 file-write events. This does not prove zero carrier occupancy. Local Linux single-handle force: raw NIO125,173ns/op, VFS95,871ns/op; 256-handle serialized EXCLUSIVE cycle: raw2,306ns/op, VFS2,256ns/op. Measurements include overhead and uncontrolled cache/warmup; do not interpret these samples as a speedup claim. The production implementation creates no workers.
 
+Local macOS and Linux jcstress reports both recorded **4/4 test classes passed**, with no failed/error classes. These are short real-file races, not exhaustive concurrency verification.
+
+The engine ownership regression suite was also run in an isolated source copy with the three pre-fix Java files and the same memory-accounting-enabled SQLite build: **10 tests, 6 failures, 3 errors**. Observed failures included allocator exhaustion causing guest traps instead of NOMEM, callbacks abandoning statements/transaction work, cross-engine function rebinding, and closed-deserialize allocation leakage. The corrected source passed all ten within the 39-test suite on both local OSes. The temporary baseline copy was removed.
+
 ## GitHub evidence
 
 - Initial12-test3-OS run: [36120034297](https://github.com/Clickin/sqlite3_vfs/actions/runs/36120034297), `98fed0001e35a4afee5cdb3d10d6f3eadddf7cf0`.
 - Fault/concurrency45-test3-OS run: [36122200402](https://github.com/Clickin/sqlite3_vfs/actions/runs/36122200402), `fde1f77fbc6ffe9089a3848523f34e09455d6cbc`.
 - Complete rollback VFS/adapter87-test3-OS run: [36124924664](https://github.com/Clickin/sqlite3_vfs/actions/runs/36124924664), `91e1e88595906eaec10fe233d6e96e00e9b3583b`.
 
-The expanded108-core/39-engine workflow is ready for the final cross-platform run; its observed results must be recorded before claiming that expanded gate passed.
+### Expanded final acceptance
+
+[Actions run 36134552143](https://github.com/Clickin/sqlite3_vfs/actions/runs/36134552143), source commit [`255124c80be957afa895a28584affaaa2428a8e9`](https://github.com/Clickin/sqlite3_vfs/commit/255124c80be957afa895a28584affaaa2428a8e9): **all seven jobs succeeded**. Downloaded artifacts were inspected, rather than relying only on the workflow badge.
+
+| Runner | JDK | Core | Engine | jcstress classes | JFR recorded pins |
+|---|---|---:|---:|---:|---:|
+| ubuntu-24.04 x64 | Temurin25.0.4.1 | 108 passed | 39 passed | 4/4 passed | 0 |
+| macos-15 ARM64 | Temurin25.0.4.1 | 108 passed | 39 passed | 4/4 passed | 0 |
+| windows-2025 x64 | Temurin25.0.4.1 | 108 passed | 39 passed | 4/4 passed | 0 |
+
+All six JUnit artifact groups report **0 failures, 0 errors, 0 skips**. All three diagnostic summaries report successful workload behavior checks. JFR file-read/write event counts were Linux3,785/282, macOS6,164/333, Windows6,458/385. Artifacts include JUnit/native subprocess output, JFR recordings, primitive baseline summaries, jcstress reports and the actual engine JAR.
+
+This closes the plan's implementation/investigation pass with the explicit stop conditions above. It is not a claim that the unresolved portability/durability/no-Wasm constraints disappeared.
