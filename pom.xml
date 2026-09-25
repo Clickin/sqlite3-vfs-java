@@ -38,12 +38,21 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.6</version>
         <configuration>
+          <argLine>--illegal-native-access=deny</argLine>
           <failIfNoTests>true</failIfNoTests>
           <forkedProcessTimeoutInSeconds>240</forkedProcessTimeoutInSeconds>
           <systemPropertyVariables>
             <junit.jupiter.execution.timeout.default>30 s</junit.jupiter.execution.timeout.default>
           </systemPropertyVariables>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution><goals><goal>test-jar</goal></goals></execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

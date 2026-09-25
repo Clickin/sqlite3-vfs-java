@@ -1,2 +1,4 @@
 /target/
+/integration-engine/target/
+/stress/target/
 .DS_Store

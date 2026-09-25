@@ -7,7 +7,6 @@ import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystems;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -64,6 +63,10 @@ public final class RollbackFile implements AutoCloseable {
         FileChannel open(Path path, StandardOpenOption... options) throws IOException;
     }
 
+    static final class ReadOnlyException extends IOException {
+        ReadOnlyException() { super("Read-only handle"); }
+    }
+
     private final State state;
     private final boolean readOnly;
     private Level level = Level.NONE;
@@ -78,55 +81,52 @@ public final class RollbackFile implements AutoCloseable {
 
     /** Opens without truncation; a writable open creates a missing file. */
     public static RollbackFile open(Path path, boolean readOnly) throws IOException {
-        return open(path, readOnly, SYSTEM_CHANNELS);
+        return open(path, readOnly, !readOnly, false);
+    }
+
+    /** CREATE and EXCLUSIVE are enforced by channel-open options, never by a probe-open. */
+    public static RollbackFile open(Path path, boolean readOnly, boolean create,
+                                    boolean exclusive) throws IOException {
+        return open(path, readOnly, create, exclusive, SYSTEM_CHANNELS, FileSystemOps.SYSTEM);
     }
 
     // Per-file injection seam: tests wrap real channels, never replace the OS lock protocol.
     static RollbackFile open(Path path, boolean readOnly, ChannelOpener opener) throws IOException {
+        return open(path, readOnly, !readOnly, false, opener, FileSystemOps.SYSTEM);
+    }
+
+    static RollbackFile open(Path path, boolean readOnly, boolean create, boolean exclusive,
+                             ChannelOpener opener, FileSystemOps fs) throws IOException {
         Objects.requireNonNull(opener, "opener");
+        Objects.requireNonNull(fs, "fs");
         Objects.requireNonNull(path, "path");
+        if ((readOnly && create) || (exclusive && !create)) {
+            throw new IllegalArgumentException("CREATE requires writable; EXCLUSIVE requires CREATE");
+        }
         if (path.getFileSystem() != FileSystems.getDefault()) {
             throw new IOException("Only the default filesystem provider is supported");
         }
         synchronized (FILES) {
+            if (exclusive) {
+                return createNew(path, opener, fs);
+            }
             BasicFileAttributes attributes;
             try {
-                attributes = Files.readAttributes(path, BasicFileAttributes.class);
+                attributes = fs.attributes(path);
             } catch (NoSuchFileException missing) {
-                if (readOnly) {
+                if (!create) {
                     throw missing;
                 }
-                FileChannel created;
                 try {
-                    created = opener.open(path, StandardOpenOption.CREATE_NEW,
-                            StandardOpenOption.READ, StandardOpenOption.WRITE,
-                            StandardOpenOption.SPARSE);
+                    return createNew(path, opener, fs);
                 } catch (FileAlreadyExistsException raced) {
-                    // Another process created it; inspect its identity before opening.
-                    return open(path, false, opener);
-                }
-                try {
-                    Path realPath = path.toRealPath();
-                    Object key = identity(realPath,
-                            Files.readAttributes(realPath, BasicFileAttributes.class));
-                    if (findState(key, realPath) != null) {
-                        throw new IOException("File identity changed during creation");
-                    }
-                    State state = new State(key, realPath, created, true, opener);
-                    FILES.put(key, state);
-                    return new RollbackFile(state, false);
-                } catch (IOException | RuntimeException failure) {
-                    try {
-                        created.close();
-                    } catch (IOException closeFailure) {
-                        failure.addSuppressed(closeFailure);
-                    }
-                    throw failure;
+                    // Inspect the winner's identity before opening any descriptor.
+                    return open(path, false, false, false, opener, fs);
                 }
             }
-            Path realPath = path.toRealPath();
+            Path realPath = fs.realPath(path);
             Object key = identity(realPath, attributes);
-            State state = findState(key, realPath);
+            State state = findState(key, realPath, fs);
             if (state == null) {
                 FileChannel channel = readOnly
                         ? opener.open(realPath, StandardOpenOption.READ)
@@ -139,10 +139,8 @@ public final class RollbackFile implements AutoCloseable {
             try {
                 state.checkHealthy();
                 if (!readOnly && state.writable == null) {
-                    // SQLite os_unix.c UnixUnusedFd/closePendingFds and JDK FileLock:
-                    // closing ANY descriptor for this inode may erase POSIX locks.
-                    // Keep the original RO channel plus this RW channel until the
-                    // final logical handle closes; never swap-and-close a channel.
+                    // Closing ANY descriptor for this inode may erase POSIX locks.
+                    // Retain the RO channel until the final logical close.
                     state.writable = state.opener.open(realPath,
                             StandardOpenOption.READ, StandardOpenOption.WRITE);
                 }
@@ -153,6 +151,39 @@ public final class RollbackFile implements AutoCloseable {
         }
     }
 
+    private static RollbackFile createNew(Path path, ChannelOpener opener, FileSystemOps fs)
+            throws IOException {
+        FileChannel created = opener.open(path, StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.SPARSE);
+        State state = null;
+        try {
+            Path realPath = fs.realPath(path);
+            Object key = identity(realPath, fs.attributes(realPath));
+            state = new State(key, realPath, created, true, opener);
+            if (findState(key, realPath, fs) != null) {
+                throw new IOException("File identity changed during creation");
+            }
+            FILES.put(key, state);
+            return new RollbackFile(state, false);
+        } catch (IOException | RuntimeException failure) {
+            try {
+                created.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+                if (state != null) {
+                    state.fail(closeFailure);
+                    FILES.putIfAbsent(state.key, state);
+                }
+            }
+            try {
+                fs.delete(path);
+            } catch (IOException | RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+    }
+
     private static Object identity(Path realPath, BasicFileAttributes attributes) throws IOException {
         if (!attributes.isRegularFile()) {
             throw new IOException("A regular file is required");
@@ -160,7 +191,7 @@ public final class RollbackFile implements AutoCloseable {
         return attributes.fileKey() == null ? realPath : attributes.fileKey();
     }
 
-    private static State findState(Object key, Path realPath) throws IOException {
+    private static State findState(Object key, Path realPath, FileSystemOps fs) throws IOException {
         if (!(key instanceof Path)) {
             return FILES.get(key);
         }
@@ -170,7 +201,7 @@ public final class RollbackFile implements AutoCloseable {
         // ponytail: O(open files) only on null-key providers; cache validated
         // aliases only if this scan becomes a measured bottleneck.
         for (State candidate : FILES.values()) {
-            if (Files.isSameFile(realPath, candidate.path)) {
+            if (fs.sameFile(realPath, candidate.path)) {
                 return candidate;
             }
         }
@@ -268,7 +299,7 @@ public final class RollbackFile implements AutoCloseable {
             checkOpen();
             state.checkHealthy();
             if (writing && readOnly) {
-                throw new IOException("Read-only handle");
+                throw new ReadOnlyException();
             }
             return state.readable();
         } finally {
@@ -310,7 +341,7 @@ public final class RollbackFile implements AutoCloseable {
                 return true;
             }
             if (readOnly && requested != Level.SHARED) {
-                throw new IOException("Read-only handle cannot acquire a write lock");
+                throw new ReadOnlyException();
             }
             if (level == Level.NONE && requested != Level.SHARED) {
                 throw new IllegalArgumentException("Acquire SHARED before a write lock");

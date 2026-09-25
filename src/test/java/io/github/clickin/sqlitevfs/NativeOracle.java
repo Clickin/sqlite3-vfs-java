@@ -5,11 +5,11 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Base64;
+import java.util.Properties;
 
 /**
  * Native SQLite is loaded only by this separate-process test entry point.
@@ -19,8 +19,8 @@ public final class NativeOracle {
     private NativeOracle() {}
 
     public static void main(String[] args) throws Exception {
-        Class.forName("org.sqlite.JDBC");
-        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + args[0]);
+        // Select the native oracle explicitly even when the pure JVM driver is also on the classpath.
+        try (Connection connection = new org.sqlite.JDBC().connect("jdbc:sqlite:" + args[0], new Properties());
              Statement statement = connection.createStatement();
              BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
              PrintWriter output = new PrintWriter(System.out, true, StandardCharsets.UTF_8)) {
