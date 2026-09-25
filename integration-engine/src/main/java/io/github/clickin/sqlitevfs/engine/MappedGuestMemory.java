@@ -33,7 +33,21 @@ public final class MappedGuestMemory implements Memory {
     private int aliasCount;
     private DataSegment[] dataSegments;
 
-    private record Alias(int handle, int page, int start, int end, ByteBuffer bytes) {
+    private static final class Alias {
+        final int handle;
+        final int page;
+        final int start;
+        final int end;
+        final ByteBuffer bytes;
+
+        Alias(int handle, int page, int start, int end, ByteBuffer bytes) {
+            this.handle = handle;
+            this.page = page;
+            this.start = start;
+            this.end = end;
+            this.bytes = bytes;
+        }
+
         boolean contains(int address, int width) {
             return address >= start && (long) address + width <= end;
         }
@@ -143,7 +157,8 @@ public final class MappedGuestMemory implements Memory {
         }
         if (segments == null) return;
         for (DataSegment segment : segments) {
-            if (segment instanceof ActiveDataSegment active) {
+            if (segment instanceof ActiveDataSegment) {
+                ActiveDataSegment active = (ActiveDataSegment) segment;
                 if (active.index() == memoryIndex) {
                     int offset = (int) ConstantEvaluators.computeConstantValue(instance, active.offsetInstructions())[0];
                     write(offset, active.data());
@@ -393,15 +408,15 @@ public final class MappedGuestMemory implements Memory {
     private static final int ADD = 0, AND = 1, OR = 2, XOR = 3, SET = 4, COMPARE = 5;
 
     private static long replacement(long old, long value, long expected, int operation) {
-        return switch (operation) {
-            case ADD -> old + value;
-            case AND -> old & value;
-            case OR -> old | value;
-            case XOR -> old ^ value;
-            case SET -> value;
-            case COMPARE -> old == expected ? value : old;
-            default -> throw new AssertionError(operation);
-        };
+        switch (operation) {
+            case ADD: return old + value;
+            case AND: return old & value;
+            case OR: return old | value;
+            case XOR: return old ^ value;
+            case SET: return value;
+            case COMPARE: return old == expected ? value : old;
+            default: throw new AssertionError(operation);
+        }
     }
 
     private static int updateSmall(Alias alias, int address, int width, int value, int expected, int operation) {
@@ -424,23 +439,23 @@ public final class MappedGuestMemory implements Memory {
         for (;;) {
             long old;
             if (alias == null) {
-                old = switch (width) {
-                    case 1 -> heap.atomicReadByte(address);
-                    case 2 -> heap.atomicReadShort(address);
-                    case 4 -> heap.atomicReadInt(address);
-                    default -> heap.atomicReadLong(address);
-                };
+                switch (width) {
+                    case 1: old = heap.atomicReadByte(address); break;
+                    case 2: old = heap.atomicReadShort(address); break;
+                    case 4: old = heap.atomicReadInt(address); break;
+                    default: old = heap.atomicReadLong(address); break;
+                }
             } else old = width == 4 ? (int) INTS.getVolatile(alias.bytes, address - alias.start)
                     : (long) LONGS.getVolatile(alias.bytes, address - alias.start);
             long next = replacement(old, value, expected, operation);
             boolean changed;
             if (alias == null) {
-                changed = switch (width) {
-                    case 1 -> heap.atomicCmpxchgByte(address, (byte) old, (byte) next) == (byte) old;
-                    case 2 -> heap.atomicCmpxchgShort(address, (short) old, (short) next) == (short) old;
-                    case 4 -> heap.atomicCmpxchgInt(address, (int) old, (int) next) == (int) old;
-                    default -> heap.atomicCmpxchgLong(address, old, next) == old;
-                };
+                switch (width) {
+                    case 1: changed = heap.atomicCmpxchgByte(address, (byte) old, (byte) next) == (byte) old; break;
+                    case 2: changed = heap.atomicCmpxchgShort(address, (short) old, (short) next) == (short) old; break;
+                    case 4: changed = heap.atomicCmpxchgInt(address, (int) old, (int) next) == (int) old; break;
+                    default: changed = heap.atomicCmpxchgLong(address, old, next) == old; break;
+                }
             } else changed = width == 4
                     ? (boolean) INTS.compareAndSet(alias.bytes, address - alias.start, (int) old, (int) next)
                     : (boolean) LONGS.compareAndSet(alias.bytes, address - alias.start, old, next);

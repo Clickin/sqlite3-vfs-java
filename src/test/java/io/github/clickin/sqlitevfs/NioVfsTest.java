@@ -25,7 +25,9 @@ import java.util.EnumMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static io.github.clickin.sqlitevfs.SqliteCodes.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -402,22 +404,27 @@ class NioVfsTest {
         assertArrayEquals(new byte[] {1, 2}, Files.readAllBytes(path));
     }
 
-    @Test
-    void clockRandomnessSleepAndErrorsStayIndependentAcrossThreads() throws Exception {
+    @ParameterizedTest(name = "clock and thread-local helpers, virtualThreads={0}")
+    @ValueSource(booleans = {false, true})
+    void clockRandomnessSleepAndErrorsStayIndependentAcrossThreads(boolean virtual) throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         for (Instant instant : new Instant[] {Instant.EPOCH, Instant.parse("2000-02-29T00:00:00Z"),
                 Instant.parse("2024-03-01T00:00:00Z")}) {
             NioVfs vfs = new NioVfs(FileSystemOps.SYSTEM, FileChannel::open,
                     Clock.fixed(instant, ZoneOffset.UTC), new Random(7));
-            long expectedDays = switch (instant.toString()) {
-                case "1970-01-01T00:00:00Z" -> 2440587;
-                case "2000-02-29T00:00:00Z" -> 2451603;
-                default -> 2460370;
-            };
+            long expectedDays;
+            switch (instant.toString()) {
+                case "1970-01-01T00:00:00Z": expectedDays = 2440587; break;
+                case "2000-02-29T00:00:00Z": expectedDays = 2451603; break;
+                default: expectedDays = 2460370; break;
+            }
             assertEquals(expectedDays + 0.5, vfs.currentTimeJulian());
             assertEquals((expectedDays * 2 + 1) * 43_200_000L, vfs.currentTimeMillisJulian());
         }
         NioVfs first = new NioVfs(FileSystemOps.SYSTEM, FileChannel::open,
-                Clock.systemUTC(), () -> 0x5a5a5a5a5a5a5a5aL);
+                Clock.systemUTC(), new Random() {
+                    @Override public long nextLong() { return 0x5a5a5a5a5a5a5a5aL; }
+                });
         ByteBuffer actual = ByteBuffer.wrap(new byte[20]);
         actual.position(2).limit(19);
         assertEquals(17, first.randomness(actual));
@@ -431,7 +438,9 @@ class NioVfsTest {
         assertEquals(0, first.sleep(0));
         assertEquals(0, first.sleep(-1));
         String originalError = first.lastError();
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        ExecutorService executor = virtual
+                ? JdkSupport.newVirtualThreadExecutor() : Executors.newSingleThreadExecutor();
+        try {
             executor.submit(() -> {
                 assertEquals("", first.lastError());
                 assertTrue(first.sleep(1000) >= 1000);
@@ -440,6 +449,9 @@ class NioVfsTest {
                 assertTrue(Thread.interrupted());
                 assertTrue(first.lastError().contains("sleep"));
             }).get();
+        } finally {
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "thread-local helper task did not stop");
         }
         assertEquals(originalError, first.lastError());
         assertNull(first.dlOpen("not-a-library"));
@@ -476,12 +488,13 @@ class NioVfsTest {
                 }
                 channels.fail(resultCode == SQLITE_IOERR_UNLOCK
                         ? FaultChannels.Operation.UNLOCK : FaultChannels.Operation.LOCK, 1);
-                int actual = switch (resultCode) {
-                    case SQLITE_IOERR_RDLOCK -> file.lock(SQLITE_LOCK_SHARED);
-                    case SQLITE_IOERR_LOCK -> file.lock(SQLITE_LOCK_RESERVED);
-                    case SQLITE_IOERR_UNLOCK -> file.unlock(SQLITE_LOCK_NONE);
-                    default -> file.checkReservedLock().code();
-                };
+                int actual;
+                switch (resultCode) {
+                    case SQLITE_IOERR_RDLOCK: actual = file.lock(SQLITE_LOCK_SHARED); break;
+                    case SQLITE_IOERR_LOCK: actual = file.lock(SQLITE_LOCK_RESERVED); break;
+                    case SQLITE_IOERR_UNLOCK: actual = file.unlock(SQLITE_LOCK_NONE); break;
+                    default: actual = file.checkReservedLock().code(); break;
+                }
                 assertEquals(resultCode, actual);
                 assertEquals(SQLITE_IOERR_READ, reader.read(ByteBuffer.allocate(1), 0));
                 assertEquals(SQLITE_IOERR_WRITE, reader.write(ByteBuffer.allocate(1), 0),

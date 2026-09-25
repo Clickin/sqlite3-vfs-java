@@ -24,7 +24,17 @@ class RollbackModelTest {
     private enum Result { OK, BUSY, IO_ERROR, INVALID }
     private enum Op { OPEN_RW, OPEN_RO, CLOSE, SHARED, RESERVED, EXCLUSIVE,
         UNLOCK_NONE, UNLOCK_SHARED, CHECK_RESERVED, INVALID_LOCK, INVALID_UNLOCK }
-    private record Step(int handle, Op op) {}
+    private static final class Step {
+        final int handle;
+        final Op op;
+
+        Step(int handle, Op op) {
+            this.handle = handle;
+            this.op = op;
+        }
+
+        @Override public String toString() { return "Step[handle=" + handle + ", op=" + op + "]"; }
+    }
 
     // Specification in terms of compatible grants only: no channels, OS lock
     // objects, descriptor ownership, reader counters, or coordinator state.
@@ -45,17 +55,17 @@ class RollbackModelTest {
             int id = step.handle;
             Grant current = grants[id];
             switch (step.op) {
-                case OPEN_RW, OPEN_RO -> {
+                case OPEN_RW:
+                case OPEN_RO:
                     grants[id] = Grant.OPEN;
                     readOnly[id] = step.op == Op.OPEN_RO;
                     return Result.OK;
-                }
-                case CLOSE -> {
+                case CLOSE:
                     grants[id] = Grant.CLOSED;
                     return Result.OK;
-                }
-                case INVALID_LOCK, INVALID_UNLOCK -> { return Result.INVALID; }
-                default -> { }
+                case INVALID_LOCK:
+                case INVALID_UNLOCK: return Result.INVALID;
+                default: break;
             }
             if (current == Grant.CLOSED) {
                 return Result.IO_ERROR;
@@ -69,12 +79,13 @@ class RollbackModelTest {
                 }
                 return Result.OK;
             }
-            Grant requested = switch (step.op) {
-                case SHARED -> Grant.READER;
-                case RESERVED -> Grant.INTENT;
-                case EXCLUSIVE -> Grant.WRITER;
-                default -> throw new AssertionError(step);
-            };
+            Grant requested;
+            switch (step.op) {
+                case SHARED: requested = Grant.READER; break;
+                case RESERVED: requested = Grant.INTENT; break;
+                case EXCLUSIVE: requested = Grant.WRITER; break;
+                default: throw new AssertionError(step);
+            }
             if (current.ordinal() >= requested.ordinal()) {
                 return Result.OK;
             }
@@ -141,13 +152,16 @@ class RollbackModelTest {
                 Result expected = model.apply(step);
                 assertEquals(expected, apply(files, path, step));
                 for (int id = 0; id < files.length; id++) {
-                    RollbackFile.Level level = switch (model.grants[id]) {
-                        case CLOSED, OPEN -> NONE;
-                        case READER -> SHARED;
-                        case INTENT -> RESERVED;
-                        case DRAINING -> PENDING;
-                        case WRITER -> EXCLUSIVE;
-                    };
+                    RollbackFile.Level level;
+                    switch (model.grants[id]) {
+                        case CLOSED:
+                        case OPEN: level = NONE; break;
+                        case READER: level = SHARED; break;
+                        case INTENT: level = RESERVED; break;
+                        case DRAINING: level = PENDING; break;
+                        case WRITER: level = EXCLUSIVE; break;
+                        default: throw new AssertionError(model.grants[id]);
+                    }
                     assertEquals(level, files[id].level(), "handle " + id);
                     if (model.grants[id] != Grant.CLOSED) {
                         assertEquals(model.hasWriter(), files[id].checkReservedLock(),
@@ -192,25 +206,23 @@ class RollbackModelTest {
                 files[id].close();
                 return Result.OK;
             }
-            return switch (step.op) {
-                case SHARED -> files[id].lock(SHARED) ? Result.OK : Result.BUSY;
-                case RESERVED -> files[id].lock(RESERVED) ? Result.OK : Result.BUSY;
-                case EXCLUSIVE -> files[id].lock(EXCLUSIVE) ? Result.OK : Result.BUSY;
-                case CHECK_RESERVED -> files[id].checkReservedLock() ? Result.BUSY : Result.OK;
-                case UNLOCK_NONE, UNLOCK_SHARED -> {
+            switch (step.op) {
+                case SHARED: return files[id].lock(SHARED) ? Result.OK : Result.BUSY;
+                case RESERVED: return files[id].lock(RESERVED) ? Result.OK : Result.BUSY;
+                case EXCLUSIVE: return files[id].lock(EXCLUSIVE) ? Result.OK : Result.BUSY;
+                case CHECK_RESERVED: return files[id].checkReservedLock() ? Result.BUSY : Result.OK;
+                case UNLOCK_NONE:
+                case UNLOCK_SHARED:
                     files[id].unlock(step.op == Op.UNLOCK_NONE ? NONE : SHARED);
-                    yield Result.OK;
-                }
-                case INVALID_LOCK -> {
+                    return Result.OK;
+                case INVALID_LOCK:
                     files[id].lock(PENDING);
-                    yield Result.OK;
-                }
-                case INVALID_UNLOCK -> {
+                    return Result.OK;
+                case INVALID_UNLOCK:
                     files[id].unlock(RESERVED);
-                    yield Result.OK;
-                }
-                default -> throw new AssertionError(step);
-            };
+                    return Result.OK;
+                default: throw new AssertionError(step);
+            }
         } catch (IOException failure) {
             return Result.IO_ERROR;
         } catch (IllegalArgumentException failure) {

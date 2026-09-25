@@ -15,7 +15,7 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.Objects;
-import java.util.random.RandomGenerator;
+import java.util.Random;
 
 import static io.github.clickin.sqlitevfs.SqliteCodes.*;
 
@@ -36,11 +36,140 @@ import static io.github.clickin.sqlitevfs.SqliteCodes.*;
  * ordinary Windows journal sync does not request directory synchronization.
  */
 public final class NioVfs {
-    public record OpenResult(int code, File file, int flags) {}
-    public record IntResult(int code, int value) {}
-    public record LongResult(int code, long value) {}
-    public record PathResult(int code, String path) {}
-    public record ShmResult(int code, ByteBuffer region) {}
+    public static final class OpenResult {
+        private final int code;
+        private final File file;
+        private final int flags;
+
+        public OpenResult(int code, File file, int flags) {
+            this.code = code;
+            this.file = file;
+            this.flags = flags;
+        }
+
+        public int code() { return code; }
+        public File file() { return file; }
+        public int flags() { return flags; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof OpenResult)) return false;
+            OpenResult result = (OpenResult) other;
+            return code == result.code && Objects.equals(file, result.file) && flags == result.flags;
+        }
+
+        @Override public int hashCode() {
+            return (31 * code + Objects.hashCode(file)) * 31 + flags;
+        }
+
+        @Override public String toString() {
+            return "OpenResult[code=" + code + ", file=" + file + ", flags=" + flags + "]";
+        }
+    }
+
+    public static final class IntResult {
+        private final int code;
+        private final int value;
+
+        public IntResult(int code, int value) {
+            this.code = code;
+            this.value = value;
+        }
+
+        public int code() { return code; }
+        public int value() { return value; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof IntResult)) return false;
+            IntResult result = (IntResult) other;
+            return code == result.code && value == result.value;
+        }
+
+        @Override public int hashCode() { return 31 * code + value; }
+
+        @Override public String toString() {
+            return "IntResult[code=" + code + ", value=" + value + "]";
+        }
+    }
+
+    public static final class LongResult {
+        private final int code;
+        private final long value;
+
+        public LongResult(int code, long value) {
+            this.code = code;
+            this.value = value;
+        }
+
+        public int code() { return code; }
+        public long value() { return value; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof LongResult)) return false;
+            LongResult result = (LongResult) other;
+            return code == result.code && value == result.value;
+        }
+
+        @Override public int hashCode() { return 31 * code + Long.hashCode(value); }
+
+        @Override public String toString() {
+            return "LongResult[code=" + code + ", value=" + value + "]";
+        }
+    }
+
+    public static final class PathResult {
+        private final int code;
+        private final String path;
+
+        public PathResult(int code, String path) {
+            this.code = code;
+            this.path = path;
+        }
+
+        public int code() { return code; }
+        public String path() { return path; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof PathResult)) return false;
+            PathResult result = (PathResult) other;
+            return code == result.code && Objects.equals(path, result.path);
+        }
+
+        @Override public int hashCode() { return 31 * code + Objects.hashCode(path); }
+
+        @Override public String toString() {
+            return "PathResult[code=" + code + ", path=" + path + "]";
+        }
+    }
+
+    public static final class ShmResult {
+        private final int code;
+        private final ByteBuffer region;
+
+        public ShmResult(int code, ByteBuffer region) {
+            this.code = code;
+            this.region = region;
+        }
+
+        public int code() { return code; }
+        public ByteBuffer region() { return region; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof ShmResult)) return false;
+            ShmResult result = (ShmResult) other;
+            return code == result.code && Objects.equals(region, result.region);
+        }
+
+        @Override public int hashCode() { return 31 * code + Objects.hashCode(region); }
+
+        @Override public String toString() {
+            return "ShmResult[code=" + code + ", region=" + region + "]";
+        }
+    }
 
     /** Requires qualified little-endian hosts and JDK-owned deterministic unmap. */
     public static boolean sharedMemorySupported() { return SharedMemoryFile.supported(); }
@@ -60,7 +189,7 @@ public final class NioVfs {
     private final FileSystemOps fs;
     private final RollbackFile.ChannelOpener channels;
     private final Clock clock;
-    private final RandomGenerator random;
+    private final Random random;
     private final ThreadLocal<String> lastError = ThreadLocal.withInitial(() -> "");
 
     public NioVfs() {
@@ -68,7 +197,7 @@ public final class NioVfs {
     }
 
     NioVfs(FileSystemOps fs, RollbackFile.ChannelOpener channels, Clock clock,
-           RandomGenerator random) {
+           Random random) {
         this.fs = Objects.requireNonNull(fs);
         this.channels = Objects.requireNonNull(channels);
         this.clock = Objects.requireNonNull(clock);
@@ -337,7 +466,8 @@ public final class NioVfs {
             message.append(' ').append(path);
         }
         message.append(": ").append(detail);
-        if (detail instanceof Throwable failure) {
+        if (detail instanceof Throwable) {
+            Throwable failure = (Throwable) detail;
             for (Throwable cause = failure.getCause(); cause != null; cause = cause.getCause()) {
                 message.append("; caused by ").append(cause);
             }
@@ -437,12 +567,13 @@ public final class NioVfs {
         }
 
         public synchronized int lock(int sqliteLockLevel) {
-            RollbackFile.Level requested = switch (sqliteLockLevel) {
-                case SQLITE_LOCK_SHARED -> RollbackFile.Level.SHARED;
-                case SQLITE_LOCK_RESERVED -> RollbackFile.Level.RESERVED;
-                case SQLITE_LOCK_EXCLUSIVE -> RollbackFile.Level.EXCLUSIVE;
-                default -> null;
-            };
+            RollbackFile.Level requested;
+            switch (sqliteLockLevel) {
+                case SQLITE_LOCK_SHARED: requested = RollbackFile.Level.SHARED; break;
+                case SQLITE_LOCK_RESERVED: requested = RollbackFile.Level.RESERVED; break;
+                case SQLITE_LOCK_EXCLUSIVE: requested = RollbackFile.Level.EXCLUSIVE; break;
+                default: requested = null;
+            }
             if (requested == null) {
                 return error(SQLITE_MISUSE, "lock", path, "Request SHARED, RESERVED or EXCLUSIVE");
             }
@@ -482,12 +613,13 @@ public final class NioVfs {
                 return new LongResult(error(SQLITE_IOERR, "fileControl", path, "File is closed"), 0);
             }
             try {
-                return switch (opcode) {
-                    case SQLITE_FCNTL_LOCKSTATE -> new LongResult(SQLITE_OK, backend.level().ordinal());
-                    case SQLITE_FCNTL_MMAP_SIZE -> new LongResult(SQLITE_OK, 0);
-                    case SQLITE_FCNTL_POWERSAFE_OVERWRITE -> new LongResult(arg <= 0 ? SQLITE_OK : SQLITE_NOTFOUND, 0);
-                    default -> new LongResult(SQLITE_NOTFOUND, 0);
-                };
+                switch (opcode) {
+                    case SQLITE_FCNTL_LOCKSTATE: return new LongResult(SQLITE_OK, backend.level().ordinal());
+                    case SQLITE_FCNTL_MMAP_SIZE: return new LongResult(SQLITE_OK, 0);
+                    case SQLITE_FCNTL_POWERSAFE_OVERWRITE:
+                        return new LongResult(arg <= 0 ? SQLITE_OK : SQLITE_NOTFOUND, 0);
+                    default: return new LongResult(SQLITE_NOTFOUND, 0);
+                }
             } catch (RuntimeException failure) {
                 return new LongResult(error(SQLITE_IOERR, "fileControl", path, failure), 0);
             }

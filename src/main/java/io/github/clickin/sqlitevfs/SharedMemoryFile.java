@@ -1,13 +1,9 @@
 package io.github.clickin.sqlitevfs;
 
 import java.io.IOException;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -29,10 +25,21 @@ final class SharedMemoryFile {
     // ponytail: only attachment/final-detachment scan this registry; split by
     // file key if the number of simultaneously open WAL databases warrants it.
     private static final Map<Path, Node> NODES = new HashMap<>();
-    private static final Unmapper UNMAPPER = Unmapper.detect();
 
-    static boolean supported() { return UNMAPPER.cleaner != null; }
-    static String diagnostic() { return UNMAPPER.diagnostic; }
+    static boolean supported() { return MappedRegion.supported(); }
+    static String diagnostic() { return MappedRegion.diagnostic(); }
+
+    static String qualifiedPlatform() {
+        String os = System.getProperty("os.name", "");
+        if (!(os.startsWith("Windows") || os.equals("Linux") || os.equals("Mac OS X"))) {
+            throw new UnsupportedOperationException("Unqualified operating system: " + os);
+        }
+        if (ByteOrder.nativeOrder() != ByteOrder.LITTLE_ENDIAN) {
+            throw new UnsupportedOperationException("Wasm WAL requires little-endian native SHM");
+        }
+        return os + "/" + System.getProperty("os.arch", "") + " Java " + Runtime.version()
+                + ": FileChannel MAP_SHARED; native little-endian; ";
+    }
 
     static final class Failure extends IOException {
         final int code;
@@ -111,7 +118,7 @@ final class SharedMemoryFile {
             node.healthy();
             int rc = node.initialize();
             if (rc != SQLITE_OK) return new NioVfs.ShmResult(rc, null);
-            MappedByteBuffer mapping = node.regions.get(page);
+            MappedRegion mapping = node.regions.get(page);
             if (mapping == null) {
                 long required = ((long) page + 1) * REGION_SIZE;
                 try {
@@ -136,7 +143,7 @@ final class SharedMemoryFile {
                     throw node.poison(SQLITE_IOERR_SHMSIZE, "Sizing SQLite SHM", failure);
                 }
                 try {
-                    mapping = node.channel.map(node.readOnly ? FileChannel.MapMode.READ_ONLY
+                    mapping = new MappedRegion(node.channel, node.readOnly ? FileChannel.MapMode.READ_ONLY
                             : FileChannel.MapMode.READ_WRITE, (long) page * REGION_SIZE, REGION_SIZE);
                     node.regions.put(page, mapping);
                 } catch (IOException | RuntimeException failure) {
@@ -145,7 +152,7 @@ final class SharedMemoryFile {
             }
             node.finishInitialization();
             return new NioVfs.ShmResult(node.readOnly ? SQLITE_READONLY : SQLITE_OK,
-                    mapping.duplicate().order(ByteOrder.nativeOrder()));
+                    mapping.buffer().duplicate().order(ByteOrder.nativeOrder()));
         }
     }
 
@@ -226,12 +233,12 @@ final class SharedMemoryFile {
                     detached = true;
                     return;
                 }
-                // Retain each mapping until its synchronous cleaner succeeds. A
+                // Retain each mapping until its synchronous close succeeds. A
                 // cleanup failure leaves this connection/node owned and retryable.
-                Iterator<MappedByteBuffer> mappings = node.regions.values().iterator();
+                Iterator<MappedRegion> mappings = node.regions.values().iterator();
                 while (mappings.hasNext()) {
                     try {
-                        UNMAPPER.unmap(mappings.next());
+                        mappings.next().close();
                         mappings.remove();
                     } catch (Throwable failure) {
                         throw node.poison(SQLITE_IOERR_SHMMAP, "Unmapping SQLite SHM", failure);
@@ -314,7 +321,7 @@ final class SharedMemoryFile {
         final FileChannel channel;
         final boolean readOnly;
         final FileSystemOps fs;
-        final Map<Integer, MappedByteBuffer> regions = new HashMap<>();
+        final Map<Integer, MappedRegion> regions = new HashMap<>();
         final FileLock[] locks = new FileLock[8];
         final int[] sharedHolders = new int[8];
         final SharedMemoryFile[] owners = new SharedMemoryFile[8];
@@ -437,38 +444,4 @@ final class SharedMemoryFile {
         }
     }
 
-    /** The only non-Java-SE dependency: JDK-owned direct-buffer cleanup. No addresses. */
-    private record Unmapper(MethodHandle cleaner, String diagnostic) {
-        static Unmapper detect() {
-            try {
-                String os = System.getProperty("os.name", "");
-                if (!(os.startsWith("Windows") || os.equals("Linux") || os.equals("Mac OS X"))) {
-                    throw new UnsupportedOperationException("Unqualified operating system: " + os);
-                }
-                if (ByteOrder.nativeOrder() != ByteOrder.LITTLE_ENDIAN) {
-                    throw new UnsupportedOperationException("Wasm WAL requires little-endian native SHM");
-                }
-                Class<?> unsafe = Class.forName("sun.misc.Unsafe");
-                if (!"jdk.unsupported".equals(unsafe.getModule().getName()) || unsafe.getClassLoader() != null) {
-                    throw new UnsupportedOperationException("JDK-owned jdk.unsupported/sun.misc.Unsafe required");
-                }
-                Field singleton = unsafe.getDeclaredField("theUnsafe");
-                if (!singleton.trySetAccessible()) throw new IllegalAccessException("sun.misc.Unsafe is not accessible");
-                MethodHandle cleaner = MethodHandles.lookup()
-                        .unreflect(unsafe.getMethod("invokeCleaner", ByteBuffer.class)).bindTo(singleton.get(null));
-                ByteBuffer probe = ByteBuffer.allocateDirect(1);
-                cleaner.invokeExact(probe);
-                return new Unmapper(cleaner, os + "/" + System.getProperty("os.arch", "")
-                        + " Java " + Runtime.version()
-                        + ": FileChannel MAP_SHARED; native little-endian; jdk.unsupported sun.misc.Unsafe.invokeCleaner available");
-            } catch (Throwable failure) {
-                return new Unmapper(null, "Shared memory unavailable: " + failure);
-            }
-        }
-
-        void unmap(MappedByteBuffer region) throws Throwable {
-            VarHandle.fullFence();
-            cleaner.invokeExact((ByteBuffer) region);
-        }
-    }
 }

@@ -506,19 +506,18 @@ class ShmFileTest {
     }
 
     /** Pauses real production syscalls, never substitutes a lock or mapping result. */
-    private static final class CrashGateChannel extends FileChannel {
-        private final FileChannel delegate;
+    private static final class CrashGateChannel extends MappingTestChannel {
         private final CrashStage stage;
         private final Runnable afterFailedExclusive;
 
         CrashGateChannel(FileChannel delegate, CrashStage stage) {
-            this.delegate = delegate;
+            super(delegate);
             this.stage = stage;
             this.afterFailedExclusive = null;
         }
 
         CrashGateChannel(FileChannel delegate, Runnable afterFailedExclusive) {
-            this.delegate = delegate;
+            super(delegate);
             this.stage = null;
             this.afterFailedExclusive = afterFailedExclusive;
         }

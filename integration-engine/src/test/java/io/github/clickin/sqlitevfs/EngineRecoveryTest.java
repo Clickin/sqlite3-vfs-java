@@ -39,9 +39,10 @@ class EngineRecoveryTest {
         initialize(database);
         String cp = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
         String executable = System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java";
-        List<String> command = new ArrayList<>(List.of(
-                Path.of(System.getProperty("java.home"), "bin", executable).toString(),
-                "--illegal-native-access=deny", "-cp", cp, CrashPeer.class.getName(), database.toString(), point));
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", executable).toString());
+        if (Runtime.version().feature() >= 24) command.add("--illegal-native-access=deny");
+        command.addAll(List.of("-cp", cp, CrashPeer.class.getName(), database.toString(), point));
         Path log = directory.resolve(point + ".log");
         Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {

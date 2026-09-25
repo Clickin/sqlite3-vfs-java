@@ -304,21 +304,33 @@ class RollbackFileFaultTest {
             } else if (transition == Transition.UNLOCK_RESERVED) {
                 assertTrue(owner.lock(RESERVED));
             }
-            FaultChannels.Operation operation = switch (transition) {
-                case JOIN_SHARED, RESERVED_LOCK, PROBE_LOCK, UPGRADE_LOCK, DOWNGRADE_LOCK -> LOCK;
-                default -> UNLOCK;
-            };
+            FaultChannels.Operation operation;
+            switch (transition) {
+                case JOIN_SHARED:
+                case RESERVED_LOCK:
+                case PROBE_LOCK:
+                case UPGRADE_LOCK:
+                case DOWNGRADE_LOCK:
+                    operation = LOCK;
+                    break;
+                default: operation = UNLOCK; break;
+            }
             int nth = transition == Transition.UPGRADE_LOCK || transition == Transition.UNLOCK_RESERVED
                     || transition == Transition.UNLOCK_PENDING ? 2 : 1;
             IOException failure = faults.fail(operation, nth);
             assertSame(failure, assertThrows(IOException.class, () -> {
                 switch (transition) {
-                    case JOIN_SHARED -> peer.lock(SHARED);
-                    case RESERVED_LOCK -> owner.lock(RESERVED);
-                    case PROBE_LOCK, PROBE_RELEASE -> peer.checkReservedLock();
-                    case UPGRADE_LOCK, UPGRADE_RELEASE -> owner.lock(EXCLUSIVE);
-                    case DOWNGRADE_LOCK, DOWNGRADE_RELEASE -> owner.unlock(SHARED);
-                    case UNLOCK_SHARED, UNLOCK_RESERVED, UNLOCK_PENDING -> owner.unlock(NONE);
+                    case JOIN_SHARED: peer.lock(SHARED); break;
+                    case RESERVED_LOCK: owner.lock(RESERVED); break;
+                    case PROBE_LOCK:
+                    case PROBE_RELEASE: peer.checkReservedLock(); break;
+                    case UPGRADE_LOCK:
+                    case UPGRADE_RELEASE: owner.lock(EXCLUSIVE); break;
+                    case DOWNGRADE_LOCK:
+                    case DOWNGRADE_RELEASE: owner.unlock(SHARED); break;
+                    case UNLOCK_SHARED:
+                    case UNLOCK_RESERVED:
+                    case UNLOCK_PENDING: owner.unlock(NONE); break;
                 }
             }));
             assertPoisoned(path, owner, peer);
@@ -341,18 +353,22 @@ class RollbackFileFaultTest {
 
     private static void assertNativeStillBlocked(Child nativeDb, Transition transition) throws Exception {
         switch (transition) {
-            case JOIN_SHARED, RESERVED_LOCK, PROBE_LOCK, UNLOCK_SHARED -> {
+            case JOIN_SHARED:
+            case RESERVED_LOCK:
+            case PROBE_LOCK:
+            case UNLOCK_SHARED:
                 assertEquals("30", nativeDb.ok("SELECT sum(value) FROM sample"));
                 nativeDb.ok("BEGIN IMMEDIATE");
                 nativeDb.ok("UPDATE sample SET value=value+1 WHERE id=1");
                 nativeDb.busy("COMMIT");
                 nativeDb.ok("ROLLBACK");
-            }
-            case PROBE_RELEASE, UNLOCK_RESERVED -> {
+                break;
+            case PROBE_RELEASE:
+            case UNLOCK_RESERVED:
                 assertEquals("30", nativeDb.ok("SELECT sum(value) FROM sample"));
                 nativeDb.busy("BEGIN IMMEDIATE");
-            }
-            default -> nativeDb.busy("SELECT sum(value) FROM sample");
+                break;
+            default: nativeDb.busy("SELECT sum(value) FROM sample"); break;
         }
     }
 

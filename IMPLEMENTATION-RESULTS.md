@@ -10,7 +10,7 @@ Reference: SQLite 3.53.4, xerial 3.53.4.0, source-id `2026-07-24 19:02:57 bf7c7f
 
 | PLAN 절 | 산출물 / 판정 |
 |---|---|
-| 0–3: 경계, 원칙, bootstrap, version | public repository, Java 25 Maven wrapper. dependency-free VFS와 별도 engine/stress 모듈. Java SE-only WAL은 아래 제한 적용. |
+| 0–3: 경계, 원칙, bootstrap, version | public repository, Java 11/25 Maven builds. dependency-free VFS와 별도 engine/stress 모듈. Java 11 legacy cleaner 및 Java 25 standard Arena mapping. |
 | 4–5: API/상수 | `NioVfs`, `RollbackFile`, `SqliteCodes`: C struct 복제 대신 Java resource API, pinned constants 검증. |
 | 6: I/O | partial transfers, zero-fill SHORT_READ, >4 GiB offsets, shrink/extend, read-only fallback, temp/delete-on-close, actual flags. `RollbackFileTest`, `NioVfsTest`. |
 | 7: path | canonical path/fileKey, null fileKey 시 same-file 비교, aliases, access/delete/fullPathname. concurrent replacement 미지원. |
@@ -40,7 +40,7 @@ NIO cannot distinguish Unix `F_GETLK`'s live shared DMS owner from an exclusive 
 
 The implementation uses SQLite-visible locks, not a private protocol: on ambiguous first attachment, obtain all eight WAL lock bytes exclusively, invalidate the second and first index headers positionally before publishing shared DMS ownership, then map/release the guard locks. Native SQLite rebuilds the invalid index from the WAL. Native transaction activity can prevent this initial guard acquisition, returning `SQLITE_BUSY_RECOVERY`. After that activity ends, retry succeeds. Plain BUSY would be interpreted by SQLite as transient DMS initialization and eventually SQLITE_PROTOCOL, so the C adapter returns the recovery-specific extended code.
 
-This is a documented availability difference from native Unix F_GETLK, not a silent claim of identical behavior. Existing attached native/JVM readers and writers use the ordinary WAL protocol. Main-file SHARED ownership and stable paths remain preconditions. The current implementation uses deprecated `sun.misc.Unsafe.invokeCleaner`; unsupported runtime must not silently rely on GC cleanup. This is not an absence of a standard alternative: Java 22+ `FileChannel.map(..., Arena)` provides deterministic unmap on arena close, but is not implemented here and conflicts with the PLAN's blanket exclusion of FFM APIs, despite not requiring native downcalls. Writable SHM is required for bootstrap even when the main DB is read-only.
+This is a documented availability difference from native Unix F_GETLK, not a silent claim of identical behavior. Existing attached native/JVM readers and writers use the ordinary WAL protocol. Main-file SHARED ownership and stable paths remain preconditions. The Java 11 artifact uses guarded `sun.misc.Unsafe.invokeCleaner`; the separate Java 25 artifact uses standard `FileChannel.map(..., Arena)` and deterministic `Arena.close()`. The selected Java 25 variant permits the standard FFM memory-management API but still has no native downcalls or application JNI. Neither variant silently falls back to GC cleanup. Writable SHM is required for bootstrap even when the main DB is read-only.
 
 ## Gate failures kept explicit
 
@@ -49,7 +49,7 @@ This is a documented availability difference from native Unix F_GETLK, not a sil
 | Windows directory open + `force(true)`; `NioVfs.delete(path,true)` | directory durability requested | AccessDeniedException / IOERR_DIR_FSYNC | no successful no-op; portable directory durability not claimed |
 | fault decorator: actual descriptor close throws before releasing OS resource | no lock/resource leak | Java channel may report closed while OS lock remains | quarantine identity until JVM restart; no leak-free guarantee |
 | failed exclusive DMS probe followed by shared probe | distinguish live attachment from dead initializer | identical observations in both cases | all-WAL-byte guard + invalidation; BUSY_RECOVERY while transactions active |
-| runtime without supported deterministic mapping cleaner | timely SHM unmap/delete | current MappedByteBuffer implementation lacks an explicit standard close | current WAL capability unavailable; standard Arena mapping is an unimplemented alternative |
+| Java 11 runtime without supported mapping cleaner | timely SHM unmap/delete | legacy MappedByteBuffer path lacks explicit standard close | Java 11 WAL unavailable; Java 25 artifact uses standard Arena ownership instead |
 | inspect engine JAR `SQLiteModule.meta` | no Wasm metadata/runtime | Wasm magic, Endive dependencies | no instruction interpreter requirement, but strict no-Wasm gates not met |
 
 ## Executed local verification
@@ -136,3 +136,29 @@ SQLite3.53.4's native Windows VFS is different from a native directory-flush wor
 The [FileChannel.force contract](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/channels/FileChannel.html#force(boolean)) guarantees the specified channel-write paths and describes read-only metadata IO as system-dependent. The observed read-only force return alone does not establish loss of a guaranteed write. A portable directory-durability enhancement is a better-supported JDK proposal than claiming that this observation proves a new data-loss regression.
 
 [JDK-8080235](https://bugs.openjdk.org/browse/JDK-8080235), “Provide ability to flush all modified buffered data to a permanent storage device,” is already Open / Enhancement / Unresolved. Its description explicitly calls directory READ+force undocumented and requests a supported alternative. The recommendation is to contribute the Windows native/JDK comparison and library evidence to that issue, not file a duplicate new regression. No external JDK issue/comment was submitted.
+
+## Java 11 compatibility and Java 25 Arena variant
+
+The pinned sqlite4j upstream commit6b7f3c7adaa41468cfa85189bee1d304f3441c1c targets **Java 11**, not Java 8 (`maven-compiler-plugin release=11`, enforcer minimum11). Common VFS/JDBC sources were backported without replacing real IO/SQL with substitutes. Java25-only virtual-thread rows remain explicit skips on Java11, with platform-thread counterparts still exercised.
+
+Two distinct Maven artifact pairs share the common source, with separate small build descriptors:
+
+- `sqlite3-vfs` / `sqlite3-vfs-jdbc`: `pom.xml`, release11, legacy guarded cleaner.
+- `sqlite3-vfs-java25` / `sqlite3-vfs-jdbc-java25`: `pom-java25.xml`, release25, Arena shared mappings.
+
+The separate coordinates avoid classifier artifacts sharing a POM that would accidentally resolve the wrong transitive VFS dependency. The two variants are alternatives, not jars to put together on one classpath. Java25 production class files contain no `sun.misc.Unsafe` reference; all baseline production class files were checked to be Java11-compatible (major55 or lower).
+
+Actual local macOS/APFS runs:
+
+| Runtime | Core passed / skipped | Engine passed / skipped | jcstress configurations |
+|---|---:|---:|---:|
+| Temurin11.0.32.1 | 103 / 6 VT-only | 39 / 2 VT-only | 112 passed, no errors |
+| Temurin25.0.2 | 110 / 0 | 41 / 0 | 56 passed, no errors |
+
+Both suite pairs had zero failures/errors. Java25 additionally exercises cross-thread Arena access, non-final-close survival and final-close invalidation of duplicate/slice/typed views. JFR runs both variants: Java11 explicitly reports VT pinning unsupported; Java25 recorded0 pins, not proof of nonblocking IO.
+
+The bounded load probe runs one persistent writer and three persistent readers through1,000 FULL commits, then216 sequential open/read/close connections, final checkpoint, reopen and integrity check. Java11 observed47,184 reader snapshots, FD16→16; Java25 observed53,528 snapshots, FD22→22. Mapped-buffer count remained0→0 across all four churn waves. These are correctness/resource-lifetime observations, not controlled comparative performance benchmarks. Long file-handle age is not itself a defect; arbitrary hours-long soak is not a release prerequisite absent a time-dependent failure hypothesis.
+
+The first local Java11 jcstress invocation found stale Java25 generated classes from an older build and skipped its configurations. A clean stress build corrected that harness issue; the reported112 configurations actually ran afterward. CI now additionally requires a positive all-passed HTML result, because jcstress can exit normally with skipped configurations.
+
+Upstream direction: offer sqlite4j the Java11-compatible real-file VFS, host/native interoperability results and optional Java25 Arena implementation. This is an alternative filesystem integration, not a promise of a binary-compatible ZeroFS swap. For xerial, a C/JNI VFS adapter is technically possible but has not been implemented here; native lock-contention reduction is unproven and must not be claimed. No maintainer was contacted and no external PR was filed.

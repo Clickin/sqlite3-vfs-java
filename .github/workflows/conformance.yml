@@ -17,114 +17,98 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  conformance:
-    name: VFS / ${{ matrix.os }} / JDK 25
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-      - name: VFS conformance (Unix)
-        if: runner.os != 'Windows'
-        run: ./mvnw -B --no-transfer-progress install
-      - name: VFS conformance (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\mvnw.cmd -B --no-transfer-progress install
-      - name: Build jcstress (Unix)
-        if: runner.os != 'Windows'
-        run: ./mvnw -B --no-transfer-progress -f stress/pom.xml package
-      - name: Build jcstress (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\mvnw.cmd -B --no-transfer-progress -f stress/pom.xml package
-      - name: Run real-file coordinator races
-        working-directory: stress/target
-        run: java -jar jcstress.jar -t "io.github.clickin.sqlitevfs.stress.*" -m quick -iters 1 -time 100 -f 1 -fsm 1 -c 2 -strideSize 1 -strideCount 1 -r results
-      - name: JFR and primitive baselines (Unix)
-        if: runner.os != 'Windows'
-        run: java --illegal-native-access=deny -cp "target/test-classes:target/classes" io.github.clickin.sqlitevfs.VfsDiagnostics all 128 target/diagnostics
-      - name: JFR and primitive baselines (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: java --illegal-native-access=deny -cp "target/test-classes;target/classes" io.github.clickin.sqlitevfs.VfsDiagnostics all 128 target/diagnostics
-      - name: Preserve VFS, stress and JFR evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: conformance-${{ matrix.os }}
-          path: |
-            target/surefire-reports/
-            target/diagnostics/
-            stress/target/results/
-            stress/target/jcstress-results-*.bin.gz
-          if-no-files-found: warn
-          retention-days: 14
-
   engine-build:
     name: Build SQLite JVM input
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Compile pinned SQLite and custom VFS
-        run: bash integration-engine/native/build.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - run: bash integration-engine/native/build.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: sqlite-engine-input
           path: integration-engine/target/sqlite-vfs.wasm
           if-no-files-found: error
           retention-days: 14
 
-  engine:
-    name: JVM SQLite / ${{ matrix.os }}
-    needs: [conformance, engine-build]
+  acceptance:
+    name: VFS and JVM SQLite / ${{ matrix.os }} / Java ${{ matrix.java.version }}
+    needs: engine-build
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
+        java:
+          - { version: '11', pom: 'pom.xml', target: 'target', stress: '', native: '' }
+          - { version: '25', pom: 'pom-java25.xml', target: 'target/java25', stress: '-Pjava25', native: '--illegal-native-access=deny' }
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: ${{ matrix.java.version }}
           cache: maven
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: sqlite-engine-input
           path: integration-engine/target
-      - name: Install already-qualified VFS (Unix)
+      - name: VFS conformance (Unix)
         if: runner.os != 'Windows'
-        run: ./mvnw -B --no-transfer-progress -DskipTests install
-      - name: Install already-qualified VFS (Windows)
+        run: ./mvnw -B --no-transfer-progress -f ${{ matrix.java.pom }} install
+      - name: VFS conformance (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\mvnw.cmd -B --no-transfer-progress -DskipTests install
-      - name: JVM SQL, native interop and crash recovery (Unix)
+        run: .\mvnw.cmd -B --no-transfer-progress -f ${{ matrix.java.pom }} install
+      - name: Build jcstress (Unix)
         if: runner.os != 'Windows'
-        run: ./mvnw -B --no-transfer-progress -f integration-engine/pom.xml verify
-      - name: JVM SQL, native interop and crash recovery (Windows)
+        run: ./mvnw -B --no-transfer-progress -f stress/pom.xml ${{ matrix.java.stress }} package
+      - name: Build jcstress (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\mvnw.cmd -B --no-transfer-progress -f integration-engine/pom.xml verify
-      - name: Preserve engine acceptance evidence
+        run: .\mvnw.cmd -B --no-transfer-progress -f stress/pom.xml ${{ matrix.java.stress }} package
+      - name: Run real-file coordinator races
+        working-directory: stress/${{ matrix.java.target }}
+        shell: bash
+        run: |
+          java -jar jcstress.jar -t "io.github.clickin.sqlitevfs.stress.*" -m quick -iters 1 -time 100 -f 1 -fsm 1 -c 2 -strideSize 1 -strideCount 1 -r results
+          python -c "import pathlib,re; m=re.search(r'Overall pass rate:</b>\s*(\d+)/(\d+)',pathlib.Path('results/index.html').read_text()); assert m and int(m[1])>0 and m[1]==m[2], 'jcstress did not execute all selected tests successfully'"
+      - name: JFR and primitive baselines (Unix)
+        if: runner.os != 'Windows'
+        run: java ${{ matrix.java.native }} -cp "${{ matrix.java.target }}/test-classes:${{ matrix.java.target }}/classes" io.github.clickin.sqlitevfs.VfsDiagnostics all 128 ${{ matrix.java.target }}/diagnostics
+      - name: JFR and primitive baselines (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: java ${{ matrix.java.native }} -cp "${{ matrix.java.target }}/test-classes;${{ matrix.java.target }}/classes" io.github.clickin.sqlitevfs.VfsDiagnostics all 128 ${{ matrix.java.target }}/diagnostics
+      - name: JVM SQL, WAL and crash recovery (Unix)
+        if: runner.os != 'Windows'
+        run: ./mvnw -B --no-transfer-progress -f integration-engine/${{ matrix.java.pom }} verify dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=${{ github.workspace }}/integration-engine/${{ matrix.java.target }}/runtime
+      - name: JVM SQL, WAL and crash recovery (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\mvnw.cmd -B --no-transfer-progress -f integration-engine/${{ matrix.java.pom }} verify dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=${{ github.workspace }}/integration-engine/${{ matrix.java.target }}/runtime
+      - name: Bounded JDBC load and connection lifetime (Unix)
+        if: runner.os != 'Windows'
+        run: java ${{ matrix.java.native }} -Xmx512m -cp "integration-engine/${{ matrix.java.target }}/classes:integration-engine/${{ matrix.java.target }}/runtime/*" diagnostics/SqliteLoad.java 1000 | tee integration-engine/${{ matrix.java.target }}/load-result.txt
+      - name: Bounded JDBC load and connection lifetime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          java ${{ matrix.java.native }} -Xmx512m -cp "integration-engine/${{ matrix.java.target }}/classes;integration-engine/${{ matrix.java.target }}/runtime/*" diagnostics/SqliteLoad.java 1000 | Tee-Object integration-engine/${{ matrix.java.target }}/load-result.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve variant acceptance evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: engine-${{ matrix.os }}
+          name: acceptance-${{ matrix.os }}-java${{ matrix.java.version }}
           path: |
-            integration-engine/target/surefire-reports/
-            integration-engine/target/*.jar
+            ${{ matrix.java.target }}/surefire-reports/
+            ${{ matrix.java.target }}/diagnostics/
+            ${{ matrix.java.target }}/*.jar
+            stress/${{ matrix.java.target }}/results/
+            integration-engine/${{ matrix.java.target }}/surefire-reports/
+            integration-engine/${{ matrix.java.target }}/*.jar
+            integration-engine/${{ matrix.java.target }}/load-result.txt
           if-no-files-found: warn
           retention-days: 14

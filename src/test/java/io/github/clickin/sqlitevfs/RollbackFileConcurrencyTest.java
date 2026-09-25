@@ -25,6 +25,7 @@ import static io.github.clickin.sqlitevfs.RollbackFile.Level.PENDING;
 import static io.github.clickin.sqlitevfs.RollbackFile.Level.RESERVED;
 import static io.github.clickin.sqlitevfs.RollbackFile.Level.SHARED;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @Timeout(value = 90, unit = TimeUnit.SECONDS)
 class RollbackFileConcurrencyTest {
@@ -35,6 +36,7 @@ class RollbackFileConcurrencyTest {
     @ValueSource(booleans = {false, true})
     void simultaneousSharedHoldersElectOneReservedOwnerUntilAllContendersFinish(boolean virtual)
             throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         Path path = directory.resolve("contenders.db");
         try (Child nativeDb = Child.nativeDb(path, true)) {
             ExecutorService executor = executor(virtual, 3);
@@ -94,6 +96,7 @@ class RollbackFileConcurrencyTest {
     @ValueSource(booleans = {false, true})
     void pendingWriterBlocksLocalAndNativeArrivalsWhileExistingReadersLeave(boolean virtual)
             throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         Path path = directory.resolve("pending.db");
         try (Child oldNativeReader = Child.nativeDb(path, true);
              Child arrivingNativeReader = Child.nativeDb(path, false);
@@ -154,6 +157,7 @@ class RollbackFileConcurrencyTest {
     @ValueSource(booleans = {false, true})
     void closingOriginalReadOnlyHandleDuringDowngradeKeepsNativeLocksSafeAcrossReopen(boolean virtual)
             throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         Path path = directory.resolve("close-downgrade.db");
         try (Child nativeDb = Child.nativeDb(path, true)) {
             // RO first exercises the two-descriptor lifetime after promotion to RW.
@@ -208,6 +212,7 @@ class RollbackFileConcurrencyTest {
     @ValueSource(booleans = {false, true})
     void competingHandlesSerializeRealWritesAndNativeSqliteSeesTheFinalBytes(boolean virtual)
             throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         Path path = directory.resolve("writes.db");
         // SQLite's big-endian user_version header field, not an engine/recovery adapter.
         long userVersionOffset = 60;
@@ -283,7 +288,7 @@ class RollbackFileConcurrencyTest {
     }
 
     private static ExecutorService executor(boolean virtual, int workers) {
-        return virtual ? Executors.newVirtualThreadPerTaskExecutor() : Executors.newFixedThreadPool(workers);
+        return virtual ? JdkSupport.newVirtualThreadExecutor() : Executors.newFixedThreadPool(workers);
     }
 
     private static void await(CountDownLatch latch) throws InterruptedException {

@@ -19,10 +19,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.github.clickin.sqlitevfs.RollbackFile.Level.*;
 import static java.nio.file.StandardOpenOption.*;
@@ -41,9 +43,6 @@ public final class VfsDiagnostics {
     private VfsDiagnostics() {}
 
     public static void main(String[] args) throws Exception {
-        if (Runtime.version().feature() < 25) {
-            throw new IllegalStateException("JDK 25 or later is required");
-        }
         String mode = args.length == 0 ? "all" : args[0];
         if (args.length > 3 || !List.of("all", "jfr", "baseline").contains(mode)) {
             throw new IllegalArgumentException(
@@ -63,6 +62,9 @@ public final class VfsDiagnostics {
             report.println("java=" + System.getProperty("java.runtime.version"));
             report.println("os=" + System.getProperty("os.name") + " " + System.getProperty("os.arch"));
             report.println("mode=" + mode + " iterations=" + iterations);
+            report.println("virtual_threads=" + (JdkSupport.hasVirtualThreads()
+                    ? "supported" : "unsupported; JDK 21+ required, VT workloads skipped"));
+            report.println("jfr_available=" + FlightRecorder.isAvailable());
             report.println("Primitive measurements, not SQL benchmarks; no timing assertions.");
             report.println("Elapsed times include loop/check overhead; warmup/cache/filesystem effects are uncontrolled.");
             if (!mode.equals("baseline")) jfr(output, iterations, report);
@@ -76,21 +78,27 @@ public final class VfsDiagnostics {
     }
 
     private static void jfr(Path output, int iterations, PrintWriter report) throws Exception {
-        require(FlightRecorder.getFlightRecorder().getEventTypes().stream()
-                .anyMatch(t -> t.getName().equals("jdk.VirtualThreadPinned")),
-                "This JDK does not expose jdk.VirtualThreadPinned");
+        require(FlightRecorder.isAvailable(), "JFR is unavailable on this runtime");
+        boolean pinnedEvents = FlightRecorder.getFlightRecorder().getEventTypes().stream()
+                .anyMatch(t -> t.getName().equals("jdk.VirtualThreadPinned"));
+        report.println("jfr_virtual_thread_pinned=" + (pinnedEvents ? "supported" : "unsupported"));
         Path recordingPath = output.resolve("vfs-jdk" + Runtime.version().feature() + ".jfr");
         try (Recording recording = new Recording()) {
-            recording.enable("jdk.VirtualThreadPinned").withThreshold(Duration.ZERO).withStackTrace();
+            if (pinnedEvents) {
+                recording.enable("jdk.VirtualThreadPinned").withThreshold(Duration.ZERO).withStackTrace();
+            }
             recording.enable("jdk.FileRead").withThreshold(Duration.ZERO);
             recording.enable("jdk.FileWrite").withThreshold(Duration.ZERO);
             recording.start();
-            workload(output, "platform", Thread.ofPlatform().name("vfs-platform-", 0).factory(),
+            AtomicInteger threadIds = new AtomicInteger();
+            workload(output, "platform", task -> new Thread(task, "vfs-platform-" + threadIds.getAndIncrement()),
                     8, iterations, report);
-            workload(output, "one-vt", Thread.ofVirtual().name("vfs-one-vt-", 0).factory(),
-                    1, iterations, report);
-            workload(output, "many-vt", Thread.ofVirtual().name("vfs-many-vt-", 0).factory(),
-                    64, iterations, report);
+            if (JdkSupport.hasVirtualThreads()) {
+                workload(output, "one-vt", JdkSupport.virtualThreadFactory("vfs-one-vt-"),
+                        1, iterations, report);
+                workload(output, "many-vt", JdkSupport.virtualThreadFactory("vfs-many-vt-"),
+                        64, iterations, report);
+            }
             recording.stop();
             recording.dump(recordingPath);
         }
@@ -124,17 +132,36 @@ public final class VfsDiagnostics {
                 }
             }
         }
-        report.printf("JFR pins=%d total_pin_ns=%d max_pin_ns=%d file_read_events=%d file_write_events=%d%n",
-                pins, totalNanos, maxNanos, reads, writes);
-        report.println("JDK 25 interpretation: synchronized no longer inherently pins virtual threads (JEP 491).");
-        report.println("Zero recorded pins is not proof of nonblocking filesystem I/O or zero carrier occupancy.");
+        if (pinnedEvents) {
+            report.printf("JFR pins=%d total_pin_ns=%d max_pin_ns=%d file_read_events=%d file_write_events=%d%n",
+                    pins, totalNanos, maxNanos, reads, writes);
+            report.println("Zero recorded pins is not proof of nonblocking filesystem I/O or zero carrier occupancy.");
+        } else {
+            report.printf("JFR pins=unsupported file_read_events=%d file_write_events=%d%n", reads, writes);
+            report.println("No virtual-thread pinning conclusion is available on this runtime.");
+        }
+        if (Runtime.version().feature() >= 24) {
+            report.println("JDK 24+ interpretation: synchronized no longer inherently pins virtual threads (JEP 491).");
+        } else if (JdkSupport.hasVirtualThreads()) {
+            report.println("Before JDK 24, synchronized can pin virtual threads; inspect recorded stacks.");
+        }
         report.println("Inspect event stacks/durations for avoidable blocking; this workload uses tryLock, never lock().");
         report.println("Harness owns and joins every worker; production does not create executors.");
         report.println("recording=" + recordingPath);
         report.flush();
     }
 
-    private record Counts(long reads, long writes, long busy, long attempts, long forces) {}
+    private static final class Counts {
+        final long reads, writes, busy, attempts, forces;
+
+        Counts(long reads, long writes, long busy, long attempts, long forces) {
+            this.reads = reads;
+            this.writes = writes;
+            this.busy = busy;
+            this.attempts = attempts;
+            this.forces = forces;
+        }
+    }
 
     private static void workload(Path output, String name, ThreadFactory factory,
                                  int workers, int iterations, PrintWriter report) throws Exception {
@@ -152,9 +179,10 @@ public final class VfsDiagnostics {
             List<Future<Counts>> futures = new ArrayList<>();
             long before = System.nanoTime();
             long reads = 0, writes = 0, busy = 0, attempts = 0, forces = 0;
-            // Test-owned threads only. Closing the executor joins every finite
-            // task; never interrupt shared-channel I/O as a cleanup strategy.
-            try (var executor = Executors.newThreadPerTaskExecutor(factory)) {
+            // Test-owned threads only. Join every finite task without interrupting
+            // shared-channel I/O as a cleanup strategy.
+            ExecutorService executor = Executors.newFixedThreadPool(workers, factory);
+            try {
                 for (int worker = 0; worker < workers; worker++) {
                     int slot = worker;
                     futures.add(executor.submit(() -> {
@@ -176,6 +204,18 @@ public final class VfsDiagnostics {
                     attempts += count.attempts;
                     forces += count.forces;
                 }
+            } finally {
+                start.countDown();
+                executor.shutdown();
+                boolean interrupted = false;
+                while (!executor.isTerminated()) {
+                    try {
+                        executor.awaitTermination(1, TimeUnit.DAYS);
+                    } catch (InterruptedException failure) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
             }
             // The per-slot sequence survives final descriptor close/reopen.
             try (RollbackFile check = RollbackFile.open(path, true)) {
@@ -471,9 +511,9 @@ public final class VfsDiagnostics {
 
     private static void closeAll(List<? extends AutoCloseable> opened, Path path) throws Exception {
         Exception failure = null;
-        for (AutoCloseable handle : opened.reversed()) {
+        for (int index = opened.size() - 1; index >= 0; index--) {
             try {
-                handle.close();
+                opened.get(index).close();
             } catch (Exception cleanup) {
                 if (failure == null) failure = cleanup;
                 else failure.addSuppressed(cleanup);

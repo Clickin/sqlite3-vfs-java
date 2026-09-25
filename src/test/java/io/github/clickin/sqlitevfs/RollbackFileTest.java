@@ -22,7 +22,6 @@ import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -329,11 +328,12 @@ class RollbackFileTest {
 
     @Test
     void virtualThreadUsesTheSameIoAndLockApi() throws Exception {
+        assumeTrue(JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         Path path = directory.resolve("virtual");
-        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        ExecutorService executor = JdkSupport.newVirtualThreadExecutor();
         try {
             executor.submit(() -> {
-                assertTrue(Thread.currentThread().isVirtual());
+                assertTrue(JdkSupport.isVirtual(Thread.currentThread()));
                 try (RollbackFile file = RollbackFile.open(path, false)) {
                     file.write(ByteBuffer.wrap(new byte[] {4, 5, 6}), 0);
                     assertTrue(file.lock(SHARED));
@@ -364,16 +364,23 @@ class RollbackFileTest {
                 while ((line = input.readLine()) != null) {
                     String[] request = line.split("\t", 2);
                     String[] command = NativeOracle.decode(request[1]).split(" ", 2);
-                    String value = switch (command[0]) {
-                        case "LOCK" -> Boolean.toString(file.lock(RollbackFile.Level.valueOf(command[1])));
-                        case "UNLOCK" -> {
+                    String value;
+                    switch (command[0]) {
+                        case "LOCK":
+                            value = Boolean.toString(file.lock(RollbackFile.Level.valueOf(command[1])));
+                            break;
+                        case "UNLOCK":
                             file.unlock(RollbackFile.Level.valueOf(command[1]));
-                            yield "";
-                        }
-                        case "CHECK" -> Boolean.toString(file.checkReservedLock());
-                        case "LEVEL" -> file.level().name();
-                        default -> throw new IllegalArgumentException("Unknown backend command: " + command[0]);
-                    };
+                            value = "";
+                            break;
+                        case "CHECK":
+                            value = Boolean.toString(file.checkReservedLock());
+                            break;
+                        case "LEVEL":
+                            value = file.level().name();
+                            break;
+                        default: throw new IllegalArgumentException("Unknown backend command: " + command[0]);
+                    }
                     NativeOracle.reply(output, request[0], 0, value);
                 }
             }
@@ -403,14 +410,14 @@ class RollbackFileTest {
             String executable = System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java";
             var command = new java.util.ArrayList<String>();
             command.add(Path.of(System.getProperty("java.home"), "bin", executable).toString());
-            command.add("--enable-native-access=ALL-UNNAMED");
+            JdkSupport.addNativeAccessOptions(command);
             command.add("-cp");
             command.add(classpath);
             command.add(mainClass.getName());
             command.addAll(Arrays.asList(arguments));
             process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.INHERIT).start();
             input = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
-            Thread.ofVirtual().name("child-output-" + process.pid()).start(() -> {
+            Thread readerThread = new Thread(() -> {
                 try (var reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
@@ -421,7 +428,9 @@ class RollbackFileTest {
                 } finally {
                     output.add(EOF);
                 }
-            });
+            }, "child-output-" + process.pid());
+            readerThread.setDaemon(true);
+            readerThread.start();
             try {
                 String ready = receive();
                 assertTrue(ready.startsWith("READY\t"), "Unexpected child handshake: " + ready);
@@ -491,6 +500,17 @@ class RollbackFileTest {
             }
         }
 
-        private record Response(int code, String value) {}
+        private static final class Response {
+            private final int code;
+            private final String value;
+
+            Response(int code, String value) {
+                this.code = code;
+                this.value = value;
+            }
+
+            int code() { return code; }
+            String value() { return value; }
+        }
     }
 }

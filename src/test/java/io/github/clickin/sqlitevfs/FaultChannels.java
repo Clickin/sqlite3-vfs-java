@@ -49,9 +49,9 @@ final class FaultChannels implements RollbackFile.ChannelOpener, AutoCloseable {
 
     synchronized void zeroProgress(Operation operation, boolean enabled) {
         switch (operation) {
-            case READ -> zeroRead = enabled;
-            case WRITE -> zeroWrite = enabled;
-            default -> throw new IllegalArgumentException("Only reads and writes can make zero progress");
+            case READ: zeroRead = enabled; break;
+            case WRITE: zeroWrite = enabled; break;
+            default: throw new IllegalArgumentException("Only reads and writes can make zero progress");
         }
     }
 
@@ -101,11 +101,10 @@ final class FaultChannels implements RollbackFile.ChannelOpener, AutoCloseable {
         closeDelegates();
     }
 
-    private final class Channel extends FileChannel {
-        private final FileChannel delegate;
+    private final class Channel extends MappingTestChannel {
 
         private Channel(FileChannel delegate) {
-            this.delegate = delegate;
+            super(delegate);
         }
 
         private int io(ByteBuffer buffer, long position, boolean write) throws IOException {

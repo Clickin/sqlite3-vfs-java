@@ -4,11 +4,11 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.clickin</groupId>
-  <artifactId>sqlite3-vfs</artifactId>
+  <artifactId>sqlite3-vfs-java25</artifactId>
   <version>0.1.0-SNAPSHOT</version>
-  <name>Java 11 SQLite VFS</name>
+  <name>Java 25 SQLite VFS (Arena)</name>
   <properties>
-    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <sqlite.version>3.53.4.0</sqlite.version>
   </properties>
@@ -27,6 +27,7 @@
     </dependency>
   </dependencies>
   <build>
+    <directory>target/java25</directory>
     <plugins>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -34,10 +35,10 @@
         <version>3.6.1</version>
         <executions>
           <execution><id>mapping-source</id><phase>generate-sources</phase><goals><goal>add-source</goal></goals>
-            <configuration><sources><source>src/main/java11</source></sources></configuration>
+            <configuration><sources><source>src/main/java25</source></sources></configuration>
           </execution>
           <execution><id>mapping-test-source</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals>
-            <configuration><sources><source>src/test/java11</source></sources></configuration>
+            <configuration><sources><source>src/test/java25</source></sources></configuration>
           </execution>
         </executions>
       </plugin>
@@ -51,6 +52,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.6</version>
         <configuration>
+          <argLine>--illegal-native-access=deny</argLine>
           <failIfNoTests>true</failIfNoTests>
           <forkedProcessTimeoutInSeconds>240</forkedProcessTimeoutInSeconds>
           <systemPropertyVariables>

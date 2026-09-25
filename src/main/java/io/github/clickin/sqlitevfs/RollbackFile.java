@@ -347,12 +347,12 @@ public final class RollbackFile implements AutoCloseable {
                 throw new IllegalArgumentException("Acquire SHARED before a write lock");
             }
             try {
-                return switch (requested) {
-                    case SHARED -> acquireShared();
-                    case RESERVED -> acquireReserved();
-                    case EXCLUSIVE -> acquireExclusive();
-                    default -> throw new AssertionError(requested);
-                };
+                switch (requested) {
+                    case SHARED: return acquireShared();
+                    case RESERVED: return acquireReserved();
+                    case EXCLUSIVE: return acquireExclusive();
+                    default: throw new AssertionError(requested);
+                }
             } catch (IOException failure) {
                 throw state.fail(failure);
             }

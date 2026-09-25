@@ -1,5 +1,6 @@
 package io.github.clickin.sqlitevfs.engine;
 
+import io.github.clickin.sqlitevfs.JdkSupport;
 import io.roastedroot.sqlite4j.BusyHandler;
 import io.roastedroot.sqlite4j.Collation;
 import io.roastedroot.sqlite4j.Function;
@@ -21,6 +22,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -28,8 +30,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @Timeout(90)
 class JdbcIntegrationTest {
@@ -273,14 +278,20 @@ class JdbcIntegrationTest {
         }
     }
 
-    @Test
-    void cancellationDoesNotEnterGuestConcurrentlyOrLeakToNextQuery() throws Exception {
+    @ParameterizedTest(name = "concurrent cancellation, virtualThreads={0}")
+    @ValueSource(booleans = {false, true})
+    void cancellationDoesNotEnterGuestConcurrentlyOrLeakToNextQuery(boolean virtual) throws Exception {
+        assumeTrue(!virtual || JdkSupport.hasVirtualThreads(), "Virtual threads require JDK 21 or later");
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicBoolean firstCallback = new AtomicBoolean(true);
+        ExecutorService executor = virtual ? JdkSupport.newVirtualThreadExecutor() : Executors.newSingleThreadExecutor();
         try (SQLiteConnection connection = open(directory.resolve("cancel.db"));
                 Statement statement = connection.createStatement();
-                var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                AutoCloseable workers = () -> {
+                    executor.shutdownNow();
+                    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "query worker did not stop");
+                }) {
             ProgressHandler.setHandler(connection, 1, new ProgressHandler() {
                 @Override public int progress() throws SQLException {
                     if (firstCallback.compareAndSet(true, false)) {

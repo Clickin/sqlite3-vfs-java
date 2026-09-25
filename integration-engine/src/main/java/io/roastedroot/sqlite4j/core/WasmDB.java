@@ -94,14 +94,14 @@ public class WasmDB extends DB implements WasmDBImports {
     private void rethrowCallbackFailure() throws SQLException {
         Throwable failure = callbackFailure;
         callbackFailure = null;
-        if (failure instanceof SQLException sqlFailure) {
-            throw sqlFailure;
+        if (failure instanceof SQLException) {
+            throw (SQLException) failure;
         }
-        if (failure instanceof RuntimeException runtimeFailure) {
-            throw runtimeFailure;
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
         }
-        if (failure instanceof Error error) {
-            throw error;
+        if (failure instanceof Error) {
+            throw (Error) failure;
         }
     }
 
@@ -228,8 +228,8 @@ public class WasmDB extends DB implements WasmDBImports {
         deferCallbackFailure(failure);
         // Return through C so its epilogues run before the original Java exception is rethrown.
         if (failure instanceof OutOfMemoryError
-                || failure instanceof SQLException sqlFailure
-                        && (sqlFailure.getErrorCode() & 0xff) == SQLITE_NOMEM) {
+                || failure instanceof SQLException
+                        && (((SQLException) failure).getErrorCode() & 0xff) == SQLITE_NOMEM) {
             lib.resultErrorNomem(context);
         } else {
             try {

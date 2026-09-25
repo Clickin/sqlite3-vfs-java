@@ -23,7 +23,21 @@ public final class VfsBridge {
         void onIo(String operation, int flags, String path, long offset, int amount, int result);
     }
 
-    private record OpenFile(NioVfs.File file, int flags, String path) {}
+    private static final class OpenFile {
+        private final NioVfs.File file;
+        private final int flags;
+        private final String path;
+
+        OpenFile(NioVfs.File file, int flags, String path) {
+            this.file = file;
+            this.flags = flags;
+            this.path = path;
+        }
+
+        NioVfs.File file() { return file; }
+        int flags() { return flags; }
+        String path() { return path; }
+    }
     private static final class Slot {
         int generation;
         int nextFree;

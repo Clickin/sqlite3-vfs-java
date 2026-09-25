@@ -91,19 +91,19 @@ public final class JvmVfsImports implements AutoCloseable {
         }
 
         @Override public boolean sharedMemorySupported() {
-            return delegate instanceof MappedGuestMemory mapped && mapped.supportsSharedMappings();
+            return delegate instanceof MappedGuestMemory && ((MappedGuestMemory) delegate).supportsSharedMappings();
         }
         @Override public void mapShared(int handle, int page, int address, ByteBuffer region) {
-            if (!(delegate instanceof MappedGuestMemory mapped)) {
+            if (!(delegate instanceof MappedGuestMemory)) {
                 throw new UnsupportedOperationException("Engine memory does not support shared mappings");
             }
-            mapped.mapShared(handle, page, address, region);
+            ((MappedGuestMemory) delegate).mapShared(handle, page, address, region);
         }
         @Override public void unmapShared(int handle) {
-            if (!(delegate instanceof MappedGuestMemory mapped)) {
+            if (!(delegate instanceof MappedGuestMemory)) {
                 throw new UnsupportedOperationException("Engine memory does not support shared mappings");
             }
-            mapped.unmapShared(handle);
+            ((MappedGuestMemory) delegate).unmapShared(handle);
         }
         @Override public long byteSize() { return (long) delegate.pages() * Memory.PAGE_SIZE; }
         @Override public byte readByte(int address) { return delegate.read(address); }
@@ -116,8 +116,8 @@ public final class JvmVfsImports implements AutoCloseable {
 
         @Override
         public void read(int address, byte[] target, int offset, int length) {
-            if (delegate instanceof MappedGuestMemory mapped) {
-                mapped.read(address, target, offset, length);
+            if (delegate instanceof MappedGuestMemory) {
+                ((MappedGuestMemory) delegate).read(address, target, offset, length);
                 return;
             }
             // Memory.readBytes allocates; reuse the bridge's transfer array instead.
