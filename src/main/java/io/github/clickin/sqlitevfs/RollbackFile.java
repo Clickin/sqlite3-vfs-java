@@ -34,8 +34,10 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <p>Do not interrupt a thread performing channel I/O. An interrupt may close a
  * shared channel, invalidating every local handle. Detected channel or lock loss
- * and lock-transition errors fail closed until all handles have been closed;
- * locks are never silently reacquired. Callers own transaction ordering and
+ * and lock-transition errors fail closed until all handles and descriptors have
+ * been closed successfully. A descriptor close IOException quarantines the file
+ * identity until JVM restart: isOpen() is already false before native cleanup.
+ * Locks are never silently reacquired. Callers own transaction ordering and
  * retries. Operations on one handle serialize against its close, while file
  * I/O on distinct handles does not hold the lock coordinator's mutex.
  */
@@ -55,6 +57,12 @@ public final class RollbackFile implements AutoCloseable {
     // ponytail: a global registry serializes open/final-close only. Per-file
     // mutexes protect lock transitions; split the registry only if needed.
     private static final Map<Object, State> FILES = new HashMap<>();
+    private static final ChannelOpener SYSTEM_CHANNELS = FileChannel::open;
+
+    @FunctionalInterface
+    interface ChannelOpener {
+        FileChannel open(Path path, StandardOpenOption... options) throws IOException;
+    }
 
     private final State state;
     private final boolean readOnly;
@@ -70,6 +78,12 @@ public final class RollbackFile implements AutoCloseable {
 
     /** Opens without truncation; a writable open creates a missing file. */
     public static RollbackFile open(Path path, boolean readOnly) throws IOException {
+        return open(path, readOnly, SYSTEM_CHANNELS);
+    }
+
+    // Per-file injection seam: tests wrap real channels, never replace the OS lock protocol.
+    static RollbackFile open(Path path, boolean readOnly, ChannelOpener opener) throws IOException {
+        Objects.requireNonNull(opener, "opener");
         Objects.requireNonNull(path, "path");
         if (path.getFileSystem() != FileSystems.getDefault()) {
             throw new IOException("Only the default filesystem provider is supported");
@@ -84,12 +98,12 @@ public final class RollbackFile implements AutoCloseable {
                 }
                 FileChannel created;
                 try {
-                    created = FileChannel.open(path, StandardOpenOption.CREATE_NEW,
+                    created = opener.open(path, StandardOpenOption.CREATE_NEW,
                             StandardOpenOption.READ, StandardOpenOption.WRITE,
                             StandardOpenOption.SPARSE);
                 } catch (FileAlreadyExistsException raced) {
                     // Another process created it; inspect its identity before opening.
-                    return open(path, false);
+                    return open(path, false, opener);
                 }
                 try {
                     Path realPath = path.toRealPath();
@@ -98,7 +112,7 @@ public final class RollbackFile implements AutoCloseable {
                     if (findState(key, realPath) != null) {
                         throw new IOException("File identity changed during creation");
                     }
-                    State state = new State(key, realPath, created, true);
+                    State state = new State(key, realPath, created, true, opener);
                     FILES.put(key, state);
                     return new RollbackFile(state, false);
                 } catch (IOException | RuntimeException failure) {
@@ -115,9 +129,9 @@ public final class RollbackFile implements AutoCloseable {
             State state = findState(key, realPath);
             if (state == null) {
                 FileChannel channel = readOnly
-                        ? FileChannel.open(realPath, StandardOpenOption.READ)
-                        : FileChannel.open(realPath, StandardOpenOption.READ, StandardOpenOption.WRITE);
-                state = new State(key, realPath, channel, !readOnly);
+                        ? opener.open(realPath, StandardOpenOption.READ)
+                        : opener.open(realPath, StandardOpenOption.READ, StandardOpenOption.WRITE);
+                state = new State(key, realPath, channel, !readOnly, opener);
                 FILES.put(key, state);
                 return new RollbackFile(state, readOnly);
             }
@@ -129,7 +143,7 @@ public final class RollbackFile implements AutoCloseable {
                     // closing ANY descriptor for this inode may erase POSIX locks.
                     // Keep the original RO channel plus this RW channel until the
                     // final logical handle closes; never swap-and-close a channel.
-                    state.writable = FileChannel.open(realPath,
+                    state.writable = state.opener.open(realPath,
                             StandardOpenOption.READ, StandardOpenOption.WRITE);
                 }
                 return new RollbackFile(state, readOnly);
@@ -327,14 +341,13 @@ public final class RollbackFile implements AutoCloseable {
         if (state.pending == null) {
             return false;
         }
-        try {
+        // Preserve acquisition failure, suppressing a second error during release.
+        try (FileLock pending = state.pending) {
             if (state.range == null) {
                 state.range = state.tryLock(state.readable(), SHARED_FIRST, SHARED_SIZE, true);
             }
-        } finally {
-            state.pending.release();
-            state.pending = null;
         }
+        state.pending = null;
         if (state.range == null) {
             return false;
         }
@@ -500,19 +513,29 @@ public final class RollbackFile implements AutoCloseable {
                 closed = true;
                 level = Level.NONE;
                 if (--state.handles == 0) {
+                    boolean descriptorsClosed = true;
                     try {
                         state.original.close();
                     } catch (IOException error) {
+                        descriptorsClosed = false;
                         failure = append(failure, error);
                     }
                     if (state.writable != null && state.writable != state.original) {
                         try {
                             state.writable.close();
                         } catch (IOException error) {
+                            descriptorsClosed = false;
                             failure = append(failure, error);
                         }
                     }
-                    FILES.remove(state.key);
+                    if (descriptorsClosed) {
+                        FILES.remove(state.key);
+                    } else {
+                        // AbstractInterruptibleChannel marks itself closed before
+                        // implCloseChannel; neither isOpen nor retrying close proves
+                        // OS ownership was released. Keep this identity quarantined.
+                        state.fail(failure);
+                    }
                 }
                 if (failure != null) {
                     throw failure;
@@ -535,6 +558,7 @@ public final class RollbackFile implements AutoCloseable {
         private final Object key;
         private final Path path;
         private final FileChannel original;
+        private final ChannelOpener opener;
         private final ReentrantLock mutex = new ReentrantLock();
         private FileChannel writable;
         private int handles;
@@ -546,10 +570,12 @@ public final class RollbackFile implements AutoCloseable {
         private FileLock pending;
         private IOException failure;
 
-        private State(Object key, Path path, FileChannel channel, boolean writable) {
+        private State(Object key, Path path, FileChannel channel, boolean writable,
+                      ChannelOpener opener) {
             this.key = key;
             this.path = path;
             this.original = channel;
+            this.opener = opener;
             this.writable = writable ? channel : null;
         }
 
@@ -559,7 +585,9 @@ public final class RollbackFile implements AutoCloseable {
 
         private void checkHealthy() throws IOException {
             if (failure != null) {
-                throw new IOException("File state failed; close all handles before reopening", failure);
+                throw new IOException(handles == 0
+                        ? "Descriptor close failed; restart this JVM before reopening"
+                        : "File state failed; close all handles before reopening", failure);
             }
             if (!original.isOpen() || (writable != null && !writable.isOpen())
                     || (range != null && !range.isValid())

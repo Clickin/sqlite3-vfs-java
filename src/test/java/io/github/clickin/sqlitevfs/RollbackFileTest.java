@@ -380,7 +380,7 @@ class RollbackFileTest {
         }
     }
 
-    private static final class Child implements AutoCloseable {
+    static final class Child implements AutoCloseable {
         private static final String EOF = "<child stdout closed>";
         private final Process process;
         private final BufferedWriter input;
